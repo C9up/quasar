@@ -11,10 +11,13 @@
  * issuing a command needs no booted provider.
  */
 
-import type { ConnectionConfig } from "../config.js";
-import type { QuasarManager } from "../QuasarManager.js";
+import type { QuasarService } from "../QuasarManager.js";
 
-type AnyManager = QuasarManager<Record<string, ConnectionConfig>>;
+/**
+ * The manager seen structurally — see QuasarService. Storing the class here
+ * would force every call site to widen its config type before seating one.
+ */
+type AnyManager = QuasarService;
 
 let instance: AnyManager | undefined;
 
