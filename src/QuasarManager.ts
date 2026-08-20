@@ -10,6 +10,27 @@ import type { ConnectionConfig, QuasarConfig } from "./config.js";
 import type { ChannelHandler, PatternHandler } from "./QuasarConnection.js";
 import { QuasarConnection } from "./QuasarConnection.js";
 
+/**
+ * What the service accessor stores: the manager seen structurally.
+ *
+ * `QuasarManager<C>` is generic over its declared connections, and a class with
+ * private fields is invariant — so a manager built from a literal config could
+ * not be assigned to `QuasarManager<Record<string, ConnectionConfig>>`. Seating
+ * one must not require widening the config type at the call site.
+ */
+export interface QuasarService {
+	readonly defaultConnectionName: string;
+	readonly activeConnectionNames: string[];
+	connection(name?: string): QuasarConnection;
+	subscribe(channel: string, handler: ChannelHandler): Promise<void>;
+	unsubscribe(channel: string): Promise<void>;
+	psubscribe(pattern: string, handler: PatternHandler): Promise<void>;
+	punsubscribe(pattern: string): Promise<void>;
+	publish(channel: string, message: string): Promise<number>;
+	quit(name?: string): Promise<void>;
+	disconnect(name?: string): void;
+}
+
 export class QuasarManager<
 	Connections extends Record<string, ConnectionConfig>,
 > {
