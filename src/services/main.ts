@@ -38,6 +38,15 @@ export function clearQuasar(manager: AnyManager): void {
 
 const redis: AnyManager = new Proxy(Object.create(null), {
 	get(_target, property) {
+		// A module loader inspects what it imports before anyone uses it: it
+		// reads `then` to decide whether the namespace is thenable, and various
+		// symbols for interop and formatting. Throwing on those turns a plain
+		// `import { setQuasar } from ".../services/main"` into a crash at import
+		// time, far from any real use. They are not manager members, so answer
+		// undefined and let a genuine access be the one that reports.
+		if (typeof property === "symbol" || property === "then") {
+			return undefined;
+		}
 		if (!instance) {
 			throw new Error(
 				"[redis] accessed before initialization — register QuasarProvider, or call setQuasar() yourself.",
