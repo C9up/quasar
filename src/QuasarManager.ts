@@ -53,7 +53,14 @@ export interface QuasarService {
  */
 export interface QuasarManager<
 	Connections extends Record<string, ConnectionConfig>,
-> extends Omit<Redis, ManagerOwnMethod | "status"> {}
+> extends Omit<Redis, ManagerOwnMethod | "status"> {
+	/**
+	 * The config this manager was built from — Adonis' `managerConfig`. Not
+	 * `readonly`: it is declared here and assigned in the constructor, which a
+	 * readonly member of a merged interface does not allow.
+	 */
+	managerConfig: QuasarConfig<Connections>;
+}
 
 /** What the manager defines itself, and must not have overwritten by a command. */
 type ManagerOwnMethod =
@@ -68,6 +75,14 @@ type ManagerOwnMethod =
 	| "defineCommand"
 	| "runCommand";
 
+/*
+ * The merge below IS the mechanism: the ioredis commands are installed on the
+ * prototype at the bottom of this file, and the interface is what tells the
+ * type system they are there. `QuasarConnection` does the same, for the same
+ * reason. Nothing is promised that is not installed — `managerConfig` is
+ * assigned in the constructor.
+ */
+// biome-ignore lint/suspicious/noUnsafeDeclarationMerging: intentional, see above
 export class QuasarManager<
 	Connections extends Record<string, ConnectionConfig>,
 > {
@@ -80,6 +95,7 @@ export class QuasarManager<
 
 	constructor(config: QuasarConfig<Connections>, logger?: QuasarLogger) {
 		this.#config = config;
+		this.managerConfig = config;
 		this.#logger = logger;
 	}
 
