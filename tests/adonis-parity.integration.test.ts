@@ -3,6 +3,7 @@
  * must keep working after swapping the import alone, so the shapes asserted
  * here were read off the published `@adonisjs/redis` build, not recalled.
  */
+import { Redis } from "ioredis";
 import { afterEach, describe, expect, it } from "vitest";
 import { QuasarManager } from "../src/QuasarManager.js";
 
@@ -12,7 +13,28 @@ const config = {
 	connections: { main: { url }, cache: { url } },
 };
 
-describe("QuasarManager > @adonisjs/redis parity (live server)", () => {
+/**
+ * Skipped, not failed, when no server answers — same probe as
+ * `connection.integration.test.ts`. CI has no Redis service, and a contributor
+ * without one still gets a green suite.
+ */
+async function serverAnswers(): Promise<boolean> {
+	const probe = new Redis(url, { lazyConnect: true, maxRetriesPerRequest: 1 });
+	try {
+		await probe.connect();
+		await probe.ping();
+		return true;
+	} catch {
+		return false;
+	} finally {
+		probe.disconnect();
+	}
+}
+
+const live = await serverAnswers();
+const describeLive = live ? describe : describe.skip;
+
+describeLive("QuasarManager > @adonisjs/redis parity (live server)", () => {
 	let manager: QuasarManager<typeof config.connections> | undefined;
 
 	afterEach(async () => {
