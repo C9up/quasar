@@ -98,3 +98,107 @@ describeLive("QuasarManager > @adonisjs/redis parity (live server)", () => {
 		expect(connection.connectionName).toBe("main");
 	});
 });
+
+describeLive("QuasarConnection > subscriber lifecycle (live server)", () => {
+	let manager: QuasarManager<typeof config.connections> | undefined;
+
+	afterEach(async () => {
+		await manager?.disconnectAll();
+		manager = undefined;
+	});
+
+	it("re-emits the pub/sub socket's lifecycle as subscriber:*", async () => {
+		manager = new QuasarManager(config);
+		const connection = manager.connection();
+		const seen: string[] = [];
+		connection.on("subscriber:ready", () => seen.push("ready"));
+
+		// The socket is opened lazily by the first subscribe — before that there
+		// is nothing an app could have attached a listener to, which is the whole
+		// reason these are re-emitted on the command connection.
+		await connection.subscribe(`quasar-sub:${process.pid}`, () => {});
+
+		await expect.poll(() => seen, { timeout: 5_000 }).toEqual(["ready"]);
+	});
+
+	it("survives a subscriber error instead of crashing the process", async () => {
+		manager = new QuasarManager(config);
+		const connection = manager.connection();
+		connection.doNotLogErrors();
+		await connection.subscribe(`quasar-err:${process.pid}`, () => {});
+
+		const subscriber = connection.ioSubscriberConnection;
+		expect(subscriber).toBeDefined();
+		// The socket is internal and created lazily, so the class must attach the
+		// listeners itself — an 'error' with none throws on an EventEmitter, and
+		// nothing outside could have subscribed before the first subscribe().
+		subscriber?.emit("error", new Error("boom"));
+
+		// Captured rather than swallowed: an app that opted out of logging can
+		// still ask what went wrong.
+		expect(connection.lastSubscriberError).toBeInstanceOf(Error);
+	});
+});
+
+describeLive("QuasarConnection > subscription events (live server)", () => {
+	let manager: QuasarManager<typeof config.connections> | undefined;
+
+	afterEach(async () => {
+		await manager?.disconnectAll();
+		manager = undefined;
+	});
+
+	it("emits subscription:ready with the channel count", async () => {
+		manager = new QuasarManager(config);
+		const connection = manager.connection();
+		const seen: number[] = [];
+		connection.on("subscription:ready", (payload: { count: number }) => {
+			seen.push(payload.count);
+		});
+
+		await connection.subscribe(`quasar-ev:${process.pid}`, () => {});
+
+		// Adonis reports the subscription through this event; an app can rely on
+		// it without awaiting the call.
+		await expect.poll(() => seen, { timeout: 5_000 }).toEqual([1]);
+	});
+
+	it("emits psubscription:ready for a pattern subscription", async () => {
+		manager = new QuasarManager(config);
+		const connection = manager.connection();
+		const seen: number[] = [];
+		connection.on("psubscription:ready", (payload: { count: number }) => {
+			seen.push(payload.count);
+		});
+
+		await connection.psubscribe(`quasar-pev:${process.pid}:*`, () => {});
+
+		await expect.poll(() => seen, { timeout: 5_000 }).toEqual([1]);
+	});
+
+	it("reports a failed subscription WITHOUT rejecting", async () => {
+		manager = new QuasarManager(config);
+		const connection = manager.connection();
+		connection.doNotLogErrors();
+		const errors: unknown[] = [];
+		connection.on("subscription:error", (payload: { error: unknown }) => {
+			errors.push(payload.error);
+		});
+		const viaCallback: unknown[] = [];
+
+		// Close the socket the subscribe would use, so the command fails.
+		await connection.subscribe(`quasar-warm:${process.pid}`, () => {});
+		await connection.ioSubscriberConnection?.quit();
+
+		// Adonis' subscribe returns void, so migrated code never awaits it — a
+		// rejection nobody handles would take the process down.
+		await expect(
+			connection.subscribe(`quasar-dead:${process.pid}`, () => {}, {
+				onError: (error) => viaCallback.push(error),
+			}),
+		).resolves.toBeUndefined();
+
+		expect(viaCallback).toHaveLength(1);
+		expect(errors).toHaveLength(1);
+	});
+});

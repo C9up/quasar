@@ -28,19 +28,34 @@ export interface QuasarLogger {
 }
 
 /**
- * Callbacks accepted by `subscribe` / `psubscribe`, for Adonis parity.
+ * Callbacks accepted by `subscribe` / `psubscribe`, exactly as Adonis takes
+ * them.
  *
- * Named deviation: Adonis' `subscribe` returns void and reports failure ONLY
- * through `onError`, so a caller that passes no options never learns the
- * subscription failed. Ours also rejects, so `await connection.subscribe(...)`
- * surfaces the error on its own — an app that never opts into `onError` cannot
- * end up silently unsubscribed. `onError` still fires, so Adonis code keeps
- * working unchanged.
+ * A failed subscription does NOT reject: Adonis' `subscribe` returns void, so
+ * code written against it never awaits the call, and a rejection nobody
+ * handles takes the process down — the opposite of what a resilience feature
+ * should do. Failure is reported the way Adonis reports it (`onError`, then
+ * the `subscription:error` event) and, unlike Adonis, also through the
+ * connection logger, so an app that wires neither still sees it.
  */
 export interface PubSubOptions {
 	onError?(error: unknown): void;
 	onSubscription?(count: number): void;
 }
+
+/**
+ * The subscriber socket's lifecycle, re-emitted as `subscriber:<name>` — the
+ * names Adonis uses. `message`/`pmessage` are NOT here: those are delivered to
+ * the registered handlers, not to listeners.
+ */
+const SUBSCRIBER_EVENTS = [
+	"connect",
+	"ready",
+	"error",
+	"close",
+	"reconnecting",
+	"end",
+] as const;
 
 /** A LUA script registered as a command through `defineCommand`. */
 export interface ScriptDefinition {
@@ -91,6 +106,7 @@ export class QuasarConnection {
 	readonly #channels = new Map<string, Set<ChannelHandler>>();
 	readonly #patterns = new Map<string, Set<PatternHandler>>();
 	#lastError: unknown;
+	#lastSubscriberError: unknown;
 	#logErrors = true;
 	readonly #logger: QuasarLogger | undefined;
 
@@ -119,6 +135,11 @@ export class QuasarConnection {
 	/** The last error ioredis reported, cleared once the connection is ready. */
 	get lastError(): unknown {
 		return this.#lastError;
+	}
+
+	/** The last error the pub/sub socket reported, if one was ever opened. */
+	get lastSubscriberError(): unknown {
+		return this.#lastSubscriberError;
 	}
 
 	/** ioredis' own connection status. */
@@ -209,12 +230,15 @@ export class QuasarConnection {
 			count = toCount(await subscriber.subscribe(channel));
 		} catch (error) {
 			options?.onError?.(error);
-			throw error;
+			this.#client.emit("subscription:error", { connection: this, error });
+			if (this.#logErrors) this.#report(error);
+			return;
 		}
 		const handlers = this.#channels.get(channel);
 		if (handlers) handlers.add(handler);
 		else this.#channels.set(channel, new Set([handler]));
 		options?.onSubscription?.(count);
+		this.#client.emit("subscription:ready", { connection: this, count });
 	}
 
 	/**
@@ -244,12 +268,15 @@ export class QuasarConnection {
 			count = toCount(await subscriber.psubscribe(pattern));
 		} catch (error) {
 			options?.onError?.(error);
-			throw error;
+			this.#client.emit("psubscription:error", { connection: this, error });
+			if (this.#logErrors) this.#report(error);
+			return;
 		}
 		const handlers = this.#patterns.get(pattern);
 		if (handlers) handlers.add(handler);
 		else this.#patterns.set(pattern, new Set([handler]));
 		options?.onSubscription?.(count);
+		this.#client.emit("psubscription:ready", { connection: this, count });
 	}
 
 	/** Stop listening to a pattern; with a handler, only that one is dropped. */
@@ -316,6 +343,28 @@ export class QuasarConnection {
 				}
 			},
 		);
+		// Re-emit the subscriber socket's lifecycle under Adonis' `subscriber:`
+		// names. Without this a pub/sub connection that drops is invisible: the
+		// socket is created lazily and internally, so an app cannot attach a
+		// listener to it before the first subscribe, and `error` on a socket
+		// with no listener crashes the process.
+		//
+		// They go out on the COMMAND client's emitter because that is what
+		// `connection.on(...)` forwards to — one listener surface, not two.
+		for (const event of SUBSCRIBER_EVENTS) {
+			subscriber.on(event, (...args: unknown[]) => {
+				if (event === "error") this.#lastSubscriberError = args[0];
+				this.#client.emit(`subscriber:${event}`, ...args);
+			});
+		}
+		// Report it too, the way a command-socket error is reported. The loop
+		// above already keeps the process alive — attaching any listener to
+		// `error` is what stops an EventEmitter from throwing — so this one is
+		// purely about the failure reaching the logger.
+		subscriber.on("error", (error: unknown) => {
+			if (this.#logErrors) this.#report(error);
+		});
+
 		this.#subscriber = subscriber;
 		return subscriber;
 	}
