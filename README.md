@@ -52,7 +52,15 @@ await redis.connection().set('user:42', payload, 'EX', 60)
 await redis.connection('cache').get('user:42')
 ```
 
-Every ioredis command is callable straight on a connection. The raw client stays reachable as `connection.ioConnection` for anything not wrapped here.
+Every ioredis command is callable straight on a connection **and on the manager**, where it runs on the default connection:
+
+```ts
+await redis.set('user:42', payload, 'EX', 60)
+```
+
+The raw client stays reachable as `connection.ioConnection` for anything not wrapped here. A connection also reports its state the way Adonis does: `connectionName`, `status`, `subscriberStatus`, `lastError`, `isConnecting()` / `isReady()` / `isClosed()`.
+
+LUA scripts go through `defineCommand` / `runCommand`; a script defined on the manager reaches every open connection and is remembered for the ones opened later.
 
 ## Pub/sub
 
@@ -64,7 +72,11 @@ await redis.publish('orders', JSON.stringify(order))
 
 Redis puts a subscribed client into a mode where it accepts nothing but subscribe/unsubscribe, so a connection that both publishes and listens needs two sockets. The second one opens **lazily**, on the first subscribe, and never at all for a connection that only runs commands — meanwhile ordinary commands keep working on the first.
 
-Re-subscribing to a channel replaces its handler instead of stacking a second one: a reload must not double-deliver.
+Subscribing twice to one channel **stacks** the handlers — both are called, as in Adonis. Pass the handler back to `unsubscribe` to drop just that one; the socket stays subscribed while others remain.
+
+A failed subscription does **not** reject: Adonis' `subscribe` returns void, so code written against it never awaits the call, and a rejection nobody handles would end the process. Failure arrives through `onError`, the `subscription:error` event, and the connection logger.
+
+The subscriber socket's lifecycle is re-emitted on the connection under Adonis' names — `subscriber:ready`, `subscriber:error`, and so on — because that socket is internal and opened lazily, so nothing outside could listen to it otherwise.
 
 ## Health
 
@@ -82,7 +94,9 @@ Both return `{ status: 'ok' | 'warning' | 'error', message }` rather than throwi
 
 ## Shutdown
 
-`QuasarProvider.shutdown()` QUITs every open connection. Without it a stopped process keeps its sockets and ioredis' reconnection timer keeps the event loop alive, so the server looks hung instead of exiting.
+Following Adonis exactly: `quit()` and `disconnect()` act on **one** connection — the default one when no name is given — and `quitAll()` / `disconnectAll()` act on every open one.
+
+`QuasarProvider.shutdown()` calls `quitAll()`. Without it a stopped process keeps its sockets and ioredis' reconnection timer keeps the event loop alive, so the server looks hung instead of exiting.
 
 ## Tests
 
