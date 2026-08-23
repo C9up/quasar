@@ -6,8 +6,15 @@
  * call sites share one socket instead of opening a pair each.
  */
 
+import { Redis } from "ioredis";
 import type { ConnectionConfig, QuasarConfig } from "./config.js";
-import type { ChannelHandler, PatternHandler } from "./QuasarConnection.js";
+import type {
+	ChannelHandler,
+	PatternHandler,
+	PubSubOptions,
+	QuasarLogger,
+	ScriptDefinition,
+} from "./QuasarConnection.js";
 import { QuasarConnection } from "./QuasarConnection.js";
 
 /**
@@ -21,24 +28,59 @@ import { QuasarConnection } from "./QuasarConnection.js";
 export interface QuasarService {
 	readonly defaultConnectionName: string;
 	readonly activeConnectionNames: string[];
+	readonly activeConnections: Record<string, QuasarConnection>;
+	readonly activeConnectionsCount: number;
 	connection(name?: string): QuasarConnection;
 	subscribe(channel: string, handler: ChannelHandler): Promise<void>;
-	unsubscribe(channel: string): Promise<void>;
+	unsubscribe(channel: string, handler?: ChannelHandler): Promise<void>;
 	psubscribe(pattern: string, handler: PatternHandler): Promise<void>;
-	punsubscribe(pattern: string): Promise<void>;
+	punsubscribe(pattern: string, handler?: PatternHandler): Promise<void>;
 	publish(channel: string, message: string): Promise<number>;
+	defineCommand(name: string, definition: ScriptDefinition): QuasarService;
+	runCommand(command: string, ...args: unknown[]): unknown;
+	doNotLogErrors(): QuasarService;
 	quit(name?: string): Promise<void>;
-	disconnect(name?: string): void;
+	disconnect(name?: string): Promise<void>;
+	quitAll(): Promise<void>;
+	disconnectAll(): Promise<void>;
 }
+
+/**
+ * Every ioredis command is callable straight on the manager and runs on the
+ * DEFAULT connection (`redis.get('key')`), the way Adonis does it — an app that
+ * never names a connection does not have to reach for `.connection()` first.
+ * The methods are installed on the prototype below; this merge describes them.
+ */
+export interface QuasarManager<
+	Connections extends Record<string, ConnectionConfig>,
+> extends Omit<Redis, ManagerOwnMethod | "status"> {}
+
+/** What the manager defines itself, and must not have overwritten by a command. */
+type ManagerOwnMethod =
+	| "connection"
+	| "subscribe"
+	| "unsubscribe"
+	| "psubscribe"
+	| "punsubscribe"
+	| "publish"
+	| "quit"
+	| "disconnect"
+	| "defineCommand"
+	| "runCommand";
 
 export class QuasarManager<
 	Connections extends Record<string, ConnectionConfig>,
 > {
 	readonly #config: QuasarConfig<Connections>;
 	readonly #connections = new Map<string, QuasarConnection>();
+	/** Scripts to replay onto every connection opened from here on. */
+	readonly #scripts = new Map<string, ScriptDefinition>();
+	#logErrors = true;
+	readonly #logger: QuasarLogger | undefined;
 
-	constructor(config: QuasarConfig<Connections>) {
+	constructor(config: QuasarConfig<Connections>, logger?: QuasarLogger) {
 		this.#config = config;
+		this.#logger = logger;
 	}
 
 	/** The name `connection()` resolves to when called without one. */
@@ -49,6 +91,16 @@ export class QuasarManager<
 	/** The connections open right now — not the ones merely declared. */
 	get activeConnectionNames(): string[] {
 		return [...this.#connections.keys()];
+	}
+
+	/** The open connections keyed by name (Adonis' `activeConnections`). */
+	get activeConnections(): Record<string, QuasarConnection> {
+		return Object.fromEntries(this.#connections);
+	}
+
+	/** How many connections are open right now. */
+	get activeConnectionsCount(): number {
+		return this.#connections.size;
 	}
 
 	/**
@@ -70,29 +122,41 @@ export class QuasarManager<
 			);
 		}
 
-		const connection = new QuasarConnection(name, config);
+		const connection = new QuasarConnection(name, config, this.#logger);
+		if (!this.#logErrors) connection.doNotLogErrors();
+		for (const [script, definition] of this.#scripts) {
+			connection.defineCommand(script, definition);
+		}
 		this.#connections.set(name, connection);
 		return connection;
 	}
 
 	/** Subscribe on the default connection. */
-	async subscribe(channel: string, handler: ChannelHandler): Promise<void> {
-		return this.connection().subscribe(channel, handler);
+	async subscribe(
+		channel: string,
+		handler: ChannelHandler,
+		options?: PubSubOptions,
+	): Promise<void> {
+		return this.connection().subscribe(channel, handler, options);
 	}
 
 	/** Unsubscribe on the default connection. */
-	async unsubscribe(channel: string): Promise<void> {
-		return this.connection().unsubscribe(channel);
+	async unsubscribe(channel: string, handler?: ChannelHandler): Promise<void> {
+		return this.connection().unsubscribe(channel, handler);
 	}
 
 	/** Pattern-subscribe on the default connection. */
-	async psubscribe(pattern: string, handler: PatternHandler): Promise<void> {
-		return this.connection().psubscribe(pattern, handler);
+	async psubscribe(
+		pattern: string,
+		handler: PatternHandler,
+		options?: PubSubOptions,
+	): Promise<void> {
+		return this.connection().psubscribe(pattern, handler, options);
 	}
 
 	/** Pattern-unsubscribe on the default connection. */
-	async punsubscribe(pattern: string): Promise<void> {
-		return this.connection().punsubscribe(pattern);
+	async punsubscribe(pattern: string, handler?: PatternHandler): Promise<void> {
+		return this.connection().punsubscribe(pattern, handler);
 	}
 
 	/** Publish on the default connection. */
@@ -101,29 +165,126 @@ export class QuasarManager<
 	}
 
 	/**
-	 * QUIT one connection, or every open one. Called by the provider on
-	 * shutdown, so a process that stops does not leave sockets behind.
+	 * Register a LUA script as a command, callable through {@link runCommand}.
+	 *
+	 * Applied to every connection open now AND remembered, so a connection
+	 * opened later gets it too — otherwise a script defined at boot would be
+	 * missing from whichever connection happened to open afterwards.
+	 */
+	defineCommand(name: string, definition: ScriptDefinition): this {
+		for (const connection of this.#connections.values()) {
+			connection.defineCommand(name, definition);
+		}
+		this.#scripts.set(name, definition);
+		return this;
+	}
+
+	/** Run a command registered with {@link defineCommand}, on the default connection. */
+	runCommand(command: string, ...args: unknown[]): unknown {
+		return this.connection().runCommand(command, ...args);
+	}
+
+	/**
+	 * Stop logging connection errors — you take over handling them, or the
+	 * process crashes on an unhandled `error` event.
+	 */
+	doNotLogErrors(): this {
+		this.#logErrors = false;
+		for (const connection of this.#connections.values()) {
+			connection.doNotLogErrors();
+		}
+		return this;
+	}
+
+	/**
+	 * QUIT ONE connection — the default one when no name is given, exactly like
+	 * Adonis. It does NOT close everything: use {@link quitAll} for that. An app
+	 * calling `redis.quit()` expects one socket closed, not all of them.
 	 */
 	async quit(name?: keyof Connections & string): Promise<void> {
-		const names = name === undefined ? this.activeConnectionNames : [name];
+		const target = name ?? this.defaultConnectionName;
+		const connection = this.#connections.get(target);
+		if (!connection) return;
+		await connection.quit();
+		this.#connections.delete(target);
+	}
+
+	/**
+	 * Drop ONE connection without waiting for in-flight commands — the default
+	 * one when no name is given. See {@link disconnectAll} to drop every one.
+	 */
+	async disconnect(name?: keyof Connections & string): Promise<void> {
+		const target = name ?? this.defaultConnectionName;
+		const connection = this.#connections.get(target);
+		if (!connection) return;
+		await connection.disconnect();
+		this.#connections.delete(target);
+	}
+
+	/** QUIT every open connection. What a provider wants on shutdown. */
+	async quitAll(): Promise<void> {
 		await Promise.all(
-			names.map(async (target) => {
-				const connection = this.#connections.get(target);
-				if (!connection) return;
-				await connection.quit();
-				this.#connections.delete(target);
-			}),
+			this.activeConnectionNames.map((name) =>
+				this.quit(name as keyof Connections & string),
+			),
 		);
 	}
 
-	/** Drop one connection, or every open one, without waiting. */
-	disconnect(name?: keyof Connections & string): void {
-		const names = name === undefined ? this.activeConnectionNames : [name];
-		for (const target of names) {
-			const connection = this.#connections.get(target);
-			if (!connection) continue;
-			connection.disconnect();
-			this.#connections.delete(target);
+	/** Drop every open connection without waiting. */
+	async disconnectAll(): Promise<void> {
+		await Promise.all(
+			this.activeConnectionNames.map((name) =>
+				this.disconnect(name as keyof Connections & string),
+			),
+		);
+	}
+}
+
+/**
+ * Install every ioredis command on the prototype, each resolving the default
+ * connection at CALL time — not at construction, when no connection is open yet
+ * and the default one may since have been quit and reopened.
+ */
+for (const method of ioredisCommandNames()) {
+	if (method in QuasarManager.prototype) continue;
+	Reflect.set(
+		QuasarManager.prototype,
+		method,
+		function forwardToDefaultConnection(
+			this: QuasarManager<Record<string, ConnectionConfig>>,
+			...args: unknown[]
+		): unknown {
+			const connection = this.connection();
+			const command = Reflect.get(connection, method);
+			if (typeof command !== "function") {
+				throw new Error(`[redis] connection has no command "${method}"`);
+			}
+			return Reflect.apply(command, connection, args);
+		},
+	);
+}
+
+/**
+ * Every command ioredis defines, walking the prototype chain: the commands live
+ * on `Commander.prototype`, the PARENT of `Redis.prototype`, so looking only at
+ * Redis' own properties finds none of them.
+ *
+ * Read as descriptors, never with `Reflect.get`: the chain carries accessors
+ * (`autoPipelineQueueSize`) that read `this`, and getting one off a bare
+ * prototype runs it against no instance and throws.
+ */
+function ioredisCommandNames(): string[] {
+	const names = new Set<string>();
+	for (
+		let target: object | null = Redis.prototype;
+		target !== null && target !== Object.prototype;
+		target = Object.getPrototypeOf(target)
+	) {
+		for (const key of Object.getOwnPropertyNames(target)) {
+			if (key === "constructor" || key.startsWith("_")) continue;
+			const descriptor = Object.getOwnPropertyDescriptor(target, key);
+			if (typeof descriptor?.value === "function") names.add(key);
 		}
 	}
+	return [...names];
 }

@@ -21,27 +21,32 @@ describe("QuasarManager", () => {
 		expect(manager.activeConnectionNames).toEqual([]);
 	});
 
-	it("hands the same connection back rather than opening a second socket", () => {
+	it("hands the same connection back rather than opening a second socket", async () => {
 		const manager = new QuasarManager(config);
 		const first = manager.connection("cache");
 		expect(manager.connection("cache")).toBe(first);
 		expect(manager.activeConnectionNames).toEqual(["cache"]);
-		manager.disconnect();
+		// disconnect() targets the DEFAULT connection, which is not "cache" —
+		// closing everything takes disconnectAll().
+		await manager.disconnectAll();
 	});
 
-	it("resolves the declared default with no argument", () => {
+	it("resolves the declared default with no argument", async () => {
 		const manager = new QuasarManager(config);
 		expect(manager.defaultConnectionName).toBe("main");
 		expect(manager.connection().name).toBe("main");
-		manager.disconnect();
+		await manager.disconnect();
 	});
 
-	it("only counts connections that were actually opened", () => {
+	it("only counts connections that were actually opened", async () => {
 		const manager = new QuasarManager(config);
 		expect(manager.activeConnectionNames).toEqual([]);
+		expect(manager.activeConnectionsCount).toBe(0);
 		manager.connection("main");
 		expect(manager.activeConnectionNames).toEqual(["main"]);
-		manager.disconnect();
+		expect(manager.activeConnectionsCount).toBe(1);
+		expect(Object.keys(manager.activeConnections)).toEqual(["main"]);
+		await manager.disconnect();
 		expect(manager.activeConnectionNames).toEqual([]);
 	});
 });

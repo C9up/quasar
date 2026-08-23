@@ -97,11 +97,14 @@ describe.skipIf(!live)("QuasarConnection against a live server", () => {
 			.toEqual([["first", `${prefix}:one`, `${prefix}:*`]]);
 	});
 
-	it("replaces a channel handler instead of stacking a second one", async () => {
+	it("delivers to EVERY handler subscribed to a channel", async () => {
 		const connection = open();
-		const channel = `redis-test:${process.pid}:replace`;
+		const channel = `redis-test:${process.pid}:stack`;
 		const calls: string[] = [];
 
+		// Two modules listening to one channel both get the message (Adonis
+		// semantics). Replacing would make the second subscribe silently stop
+		// the first.
 		await connection.subscribe(channel, () => {
 			calls.push("first");
 		});
@@ -110,6 +113,28 @@ describe.skipIf(!live)("QuasarConnection against a live server", () => {
 		});
 		await connection.publish(channel, "once");
 
+		await expect
+			.poll(() => [...calls].sort(), { timeout: 5_000 })
+			.toEqual(["first", "second"]);
+	});
+
+	it("unsubscribing ONE handler leaves the others receiving", async () => {
+		const connection = open();
+		const channel = `redis-test:${process.pid}:partial`;
+		const calls: string[] = [];
+		const first = (): void => {
+			calls.push("first");
+		};
+
+		await connection.subscribe(channel, first);
+		await connection.subscribe(channel, () => {
+			calls.push("second");
+		});
+		await connection.unsubscribe(channel, first);
+		await connection.publish(channel, "once");
+
+		// Only the remaining handler fires — and the socket stays subscribed,
+		// which is the point of passing a handler to unsubscribe.
 		await expect.poll(() => calls, { timeout: 5_000 }).toEqual(["second"]);
 	});
 

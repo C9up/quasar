@@ -62,7 +62,9 @@ export default class QuasarProvider {
 	async shutdown(): Promise<void> {
 		const manager = this.#manager;
 		if (!manager) return;
-		await manager.quit();
+		// quitAll, not quit: `quit()` closes only the DEFAULT connection (Adonis
+		// semantics). Shutdown has to close every one of them.
+		await manager.quitAll();
 		clearQuasar(manager);
 		this.#manager = undefined;
 	}

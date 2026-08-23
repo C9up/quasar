@@ -28,7 +28,13 @@ export type {
 export { defineConfig, isClusterConfig } from "./config.js";
 export type { HealthResult, HealthStatus } from "./health.js";
 export { QuasarCheck, QuasarMemoryUsageCheck } from "./health.js";
-export type { ChannelHandler, PatternHandler } from "./QuasarConnection.js";
+export type {
+	ChannelHandler,
+	PatternHandler,
+	PubSubOptions,
+	QuasarLogger,
+	ScriptDefinition,
+} from "./QuasarConnection.js";
 export { QuasarConnection } from "./QuasarConnection.js";
 export type { QuasarService } from "./QuasarManager.js";
 export { QuasarManager } from "./QuasarManager.js";
