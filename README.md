@@ -12,6 +12,9 @@ This package owns **the connection, and nothing else**. The packages that store 
 pnpm add @c9up/quasar
 ```
 
+`ream add @c9up/quasar` installs it, registers the provider and writes
+`config/redis.ts`. The rest of this page assumes that has run.
+
 ## Configure
 
 ```ts
