@@ -45,7 +45,9 @@ describe("QuasarMemoryUsageCheck", () => {
 		`# Memory\r\nused_memory:${used}\r\nmaxmemory:0\r\n`;
 
 	it("stays ok below the warning threshold", async () => {
-		const check = new QuasarMemoryUsageCheck(connectionWith({ info: info(100) }))
+		const check = new QuasarMemoryUsageCheck(
+			connectionWith({ info: info(100) }),
+		)
 			.warnWhenExceeds(400)
 			.failWhenExceeds(800);
 		const result = await check.run();
@@ -54,14 +56,18 @@ describe("QuasarMemoryUsageCheck", () => {
 	});
 
 	it("warns between the two thresholds", async () => {
-		const check = new QuasarMemoryUsageCheck(connectionWith({ info: info(500) }))
+		const check = new QuasarMemoryUsageCheck(
+			connectionWith({ info: info(500) }),
+		)
 			.warnWhenExceeds(400)
 			.failWhenExceeds(800);
 		expect((await check.run()).status).toBe("warning");
 	});
 
 	it("fails past the failure threshold", async () => {
-		const check = new QuasarMemoryUsageCheck(connectionWith({ info: info(900) }))
+		const check = new QuasarMemoryUsageCheck(
+			connectionWith({ info: info(900) }),
+		)
 			.warnWhenExceeds(400)
 			.failWhenExceeds(800);
 		expect((await check.run()).status).toBe("error");

@@ -79,26 +79,26 @@ describe("services/main", () => {
 	});
 });
 
-describe('the accessor before initialization', () => {
-	it('answers undefined for `then`, so importing it is not a crash', () => {
+describe("the accessor before initialization", () => {
+	it("answers undefined for `then`, so importing it is not a crash", () => {
 		// A loader reads `then` on what it imports to decide whether the module
 		// namespace is thenable. Throwing there made `import { setQuasar }` fail
 		// at import time — echo's CI caught it.
-		const seated = getQuasar()
-		if (seated) clearQuasar(seated)
-		expect(Reflect.get(redis, 'then')).toBeUndefined()
-	})
+		const seated = getQuasar();
+		if (seated) clearQuasar(seated);
+		expect(Reflect.get(redis, "then")).toBeUndefined();
+	});
 
-	it('answers undefined for symbols rather than throwing', () => {
-		const seated = getQuasar()
-		if (seated) clearQuasar(seated)
-		expect(Reflect.get(redis, Symbol.toStringTag)).toBeUndefined()
-		expect(Reflect.get(redis, Symbol.iterator)).toBeUndefined()
-	})
+	it("answers undefined for symbols rather than throwing", () => {
+		const seated = getQuasar();
+		if (seated) clearQuasar(seated);
+		expect(Reflect.get(redis, Symbol.toStringTag)).toBeUndefined();
+		expect(Reflect.get(redis, Symbol.iterator)).toBeUndefined();
+	});
 
-	it('still reports a real access made too early', () => {
-		const seated = getQuasar()
-		if (seated) clearQuasar(seated)
-		expect(() => redis.connection()).toThrow(/accessed before initialization/)
-	})
-})
+	it("still reports a real access made too early", () => {
+		const seated = getQuasar();
+		if (seated) clearQuasar(seated);
+		expect(() => redis.connection()).toThrow(/accessed before initialization/);
+	});
+});
