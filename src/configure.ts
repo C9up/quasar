@@ -9,6 +9,7 @@
 
 interface Codemods {
 	addProvider(importPath: string): Promise<void>;
+	addEnvVars(vars: Record<string, string>): Promise<void>;
 	writeFile(
 		filePath: string,
 		content: string,
@@ -17,6 +18,15 @@ interface Codemods {
 }
 
 export async function configure(codemods: Codemods): Promise<void> {
+	// The config below reads these, so they are declared here. Writing the file
+	// without them leaves an application whose config asks the environment for
+	// something nothing ever put there.
+	await codemods.addEnvVars({
+		REDIS_HOST: "127.0.0.1",
+		REDIS_PORT: "6379",
+		REDIS_PASSWORD: "",
+	});
+
 	await codemods.addProvider("@c9up/quasar/provider");
 	await codemods.writeFile(
 		"config/redis.ts",
