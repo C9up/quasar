@@ -9,13 +9,31 @@
 import { describe, expect, it, vi } from "vitest";
 import { QuasarConnection } from "../src/QuasarConnection.js";
 
-/** `lazyConnect` builds the ioredis client without dialling anything. */
+/**
+ * A connection that never reaches a server, on any machine.
+ *
+ * `lazyConnect` builds the ioredis client without dialling, and
+ * `enableOfflineQueue: false` makes a command issued before the socket is up
+ * reject at once instead of waiting in the offline queue.
+ *
+ * Both matter. Without the second, the outcome depended on whether the
+ * developer happened to have Redis on 6379: locally it answered and the
+ * warm-up subscribe succeeded, so these tests passed for the wrong reason,
+ * while CI has nothing listening and ioredis retried until the 5s timeout —
+ * twelve failures that could not be reproduced on the machine that wrote them.
+ * `retryStrategy` returning null stops the reconnect loop leaving a timer
+ * behind after the run.
+ */
+const OFFLINE = {
+	host: "127.0.0.1",
+	port: 6379,
+	lazyConnect: true,
+	enableOfflineQueue: false,
+	retryStrategy: () => null,
+} as const;
+
 const connection = (name = "main") =>
-	new QuasarConnection(name, {
-		host: "127.0.0.1",
-		port: 6379,
-		lazyConnect: true,
-	});
+	new QuasarConnection(name, { ...OFFLINE });
 
 describe("quasar > what a connection reports about itself", () => {
 	it("answers to the Adonis spelling of its name too", () => {
@@ -82,11 +100,7 @@ describe("quasar > an error does not take the process down", () => {
 
 	it("reports through the logger it was given", () => {
 		const logger = { error: vi.fn() };
-		const c = new QuasarConnection(
-			"main",
-			{ host: "127.0.0.1", port: 6379, lazyConnect: true },
-			logger,
-		);
+		const c = new QuasarConnection("main", { ...OFFLINE }, logger);
 		const failure = new Error("ECONNREFUSED");
 
 		c.ioConnection.emit("error", failure);
@@ -99,11 +113,7 @@ describe("quasar > an error does not take the process down", () => {
 
 	it("stops reporting, but keeps recording, after doNotLogErrors()", () => {
 		const logger = { error: vi.fn() };
-		const c = new QuasarConnection(
-			"main",
-			{ host: "127.0.0.1", port: 6379, lazyConnect: true },
-			logger,
-		);
+		const c = new QuasarConnection("main", { ...OFFLINE }, logger);
 
 		expect(c.doNotLogErrors()).toBe(c);
 		const failure = new Error("ECONNREFUSED");
@@ -138,17 +148,23 @@ describe("quasar > scripts registered as commands", () => {
 		);
 	});
 
-	it("calls a script once it has been defined", () => {
+	it("calls a script once it has been defined", async () => {
 		const c = connection();
 		c.defineCommand("release", {
 			numberOfKeys: 1,
 			lua: "return redis.call('del', KEYS[1])",
 		});
 
-		// The script is registered on the client; calling it dials, which is
-		// what the integration suite covers. What matters here is that the
-		// dispatcher found it rather than refusing.
-		expect(() => c.runCommand("release", "lock:1")).not.toThrow(/no command/);
+		// The script is registered on the client; running it for real is the
+		// integration suite's job. What matters here is that the dispatcher
+		// found it rather than refusing.
+		//
+		// The call is awaited and its failure swallowed: with no socket the
+		// command rejects at once, and an unawaited rejection is reported as an
+		// unhandled error for the whole run.
+		await expect(c.runCommand("release", "lock:1")).rejects.toThrow(
+			/isn't writeable/,
+		);
 	});
 
 	it("hands defineCommand back for chaining", () => {
@@ -218,11 +234,7 @@ describe("quasar > pub/sub without a server answering", () => {
 
 	it("logs a failed subscribe as well as reporting it", async () => {
 		const logger = { error: vi.fn() };
-		const c = new QuasarConnection(
-			"main",
-			{ host: "127.0.0.1", port: 6379, lazyConnect: true },
-			logger,
-		);
+		const c = new QuasarConnection("main", { ...OFFLINE }, logger);
 		const subscriber = await withSubscriber(c);
 		vi.spyOn(subscriber, "subscribe").mockRejectedValue(new Error("NOAUTH"));
 		logger.error.mockClear();
@@ -349,11 +361,7 @@ describe("quasar > pub/sub without a server answering", () => {
 
 	it("reports an error on the subscriber socket too", async () => {
 		const logger = { error: vi.fn() };
-		const c = new QuasarConnection(
-			"main",
-			{ host: "127.0.0.1", port: 6379, lazyConnect: true },
-			logger,
-		);
+		const c = new QuasarConnection("main", { ...OFFLINE }, logger);
 		const subscriber = await withSubscriber(c);
 		logger.error.mockClear();
 
