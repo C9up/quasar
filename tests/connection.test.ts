@@ -193,6 +193,27 @@ describe("quasar > pub/sub without a server answering", () => {
 		return subscriber;
 	};
 
+	it("reports a handler that rejects instead of letting it escape", async () => {
+		const errors: unknown[] = [];
+		const c = new QuasarConnection(
+			"main",
+			{ ...OFFLINE },
+			{ error: (payload: unknown) => errors.push(payload) },
+		);
+		const subscriber = await withSubscriber(c);
+		await c.subscribe("orders", () =>
+			Promise.reject(new Error("handler blew up")),
+		);
+
+		subscriber.emit("message", "orders", "{}");
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		// A message handler is an event callback — nobody awaits it — so a
+		// rejection had nowhere to go and surfaced as an unhandledRejection,
+		// which some runtimes turn into an exit.
+		expect(errors.length).toBeGreaterThan(0);
+	});
+
 	it("hands a failed subscribe to the caller instead of throwing", async () => {
 		const c = connection();
 		const subscriber = await withSubscriber(c);

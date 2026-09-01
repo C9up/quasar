@@ -332,14 +332,23 @@ export class QuasarConnection {
 		const subscriber = makeClient(this.#config);
 		subscriber.on("message", (channel: string, message: string) => {
 			for (const handler of this.#channels.get(channel) ?? []) {
-				void handler(message, channel);
+				// A handler that rejects has nobody to reject to — this is an
+				// event callback, not an awaited call — so an unhandled rejection
+				// took the process down on some runtimes and vanished on others.
+				// It is reported the way a connection failure is, and the other
+				// handlers on the channel still run.
+				void Promise.resolve(handler(message, channel)).catch(
+					(error: unknown) => this.#report(error),
+				);
 			}
 		});
 		subscriber.on(
 			"pmessage",
 			(pattern: string, channel: string, message: string) => {
 				for (const handler of this.#patterns.get(pattern) ?? []) {
-					void handler(message, channel, pattern);
+					void Promise.resolve(handler(message, channel, pattern)).catch(
+						(error: unknown) => this.#report(error),
+					);
 				}
 			},
 		);
