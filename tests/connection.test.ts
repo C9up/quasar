@@ -214,6 +214,35 @@ describe("quasar > pub/sub without a server answering", () => {
 		expect(errors.length).toBeGreaterThan(0);
 	});
 
+	it("reports a handler that throws synchronously, and still runs the rest", async () => {
+		const errors: unknown[] = [];
+		const c = new QuasarConnection(
+			"main",
+			{ ...OFFLINE },
+			{ error: (payload: unknown) => errors.push(payload) },
+		);
+		const subscriber = await withSubscriber(c);
+		const reached: string[] = [];
+
+		// `Promise.resolve(handler(...))` CALLS the handler before the promise
+		// exists, so a synchronous throw never reached the `.catch`: it unwound
+		// the dispatch loop and escaped into the Redis client's own callback,
+		// taking every later handler on the channel with it.
+		await c.subscribe("orders", () => {
+			reached.push("first");
+			throw new Error("sync boom");
+		});
+		await c.subscribe("orders", () => {
+			reached.push("second");
+		});
+
+		subscriber.emit("message", "orders", "{}");
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		expect(reached).toEqual(["first", "second"]);
+		expect(errors.length).toBeGreaterThan(0);
+	});
+
 	it("hands a failed subscribe to the caller instead of throwing", async () => {
 		const c = connection();
 		const subscriber = await withSubscriber(c);

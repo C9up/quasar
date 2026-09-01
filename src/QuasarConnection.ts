@@ -326,29 +326,39 @@ export class QuasarConnection {
 		else console.error("[redis] connection failure", payload);
 	}
 
+	/**
+	 * Run one subscriber handler with nothing able to escape it.
+	 *
+	 * A handler that rejects has nobody to reject to — this is an event
+	 * callback, not an awaited call — so an unhandled rejection took the
+	 * process down on some runtimes and vanished on others. It is reported the
+	 * way a connection failure is, and the other handlers still run.
+	 *
+	 * `Promise.resolve(handler(...))` was not enough: the handler is CALLED
+	 * before the promise exists, so a synchronous `throw` never reached the
+	 * `.catch` — it unwound the `for` loop and escaped into the Redis client's
+	 * own callback, and every handler after it on that channel was skipped.
+	 * Invoking inside the async function is what puts both failures on the
+	 * same path.
+	 */
+	#dispatch(run: () => unknown): void {
+		void (async () => run())().catch((error: unknown) => this.#report(error));
+	}
+
 	#ensureSubscriber(): RedisClient {
 		if (this.#subscriber) return this.#subscriber;
 
 		const subscriber = makeClient(this.#config);
 		subscriber.on("message", (channel: string, message: string) => {
 			for (const handler of this.#channels.get(channel) ?? []) {
-				// A handler that rejects has nobody to reject to — this is an
-				// event callback, not an awaited call — so an unhandled rejection
-				// took the process down on some runtimes and vanished on others.
-				// It is reported the way a connection failure is, and the other
-				// handlers on the channel still run.
-				void Promise.resolve(handler(message, channel)).catch(
-					(error: unknown) => this.#report(error),
-				);
+				this.#dispatch(() => handler(message, channel));
 			}
 		});
 		subscriber.on(
 			"pmessage",
 			(pattern: string, channel: string, message: string) => {
 				for (const handler of this.#patterns.get(pattern) ?? []) {
-					void Promise.resolve(handler(message, channel, pattern)).catch(
-						(error: unknown) => this.#report(error),
-					);
+					this.#dispatch(() => handler(message, channel, pattern));
 				}
 			},
 		);
