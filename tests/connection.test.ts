@@ -260,7 +260,7 @@ describe("quasar > pub/sub without a server answering", () => {
 		).resolves.toBeUndefined();
 
 		expect(onError).toHaveBeenCalledWith(failure);
-		expect(emitted[0].error).toBe(failure);
+		expect(emitted[0]?.error).toBe(failure);
 	});
 
 	it("does the same for a pattern subscribe", async () => {
@@ -279,7 +279,7 @@ describe("quasar > pub/sub without a server answering", () => {
 		).resolves.toBeUndefined();
 
 		expect(onError).toHaveBeenCalledWith(failure);
-		expect(emitted[0].error).toBe(failure);
+		expect(emitted[0]?.error).toBe(failure);
 	});
 
 	it("logs a failed subscribe as well as reporting it", async () => {
@@ -306,7 +306,7 @@ describe("quasar > pub/sub without a server answering", () => {
 		await c.subscribe("orders", () => {}, { onSubscription });
 
 		expect(onSubscription).toHaveBeenCalledWith(1);
-		expect(ready[0].count).toBe(1);
+		expect(ready[0]?.count).toBe(1);
 	});
 
 	it("delivers a message to every handler on the channel", async () => {
