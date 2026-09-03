@@ -23,13 +23,11 @@ import type { QuasarManager } from "./QuasarManager.js";
 
 declare module "@c9up/ream/types" {
 	interface ContainerBindings {
+		/** The Redis connection manager, bound by the provider. */
+		"quasar.redis": QuasarManager<Record<string, ConnectionConfig>>;
 		/**
-		 * The Redis connection manager, bound by the provider.
-		 *
-		 * The general connection map, not an application's own: the names come
-		 * from `config/redis.ts` and this package cannot know them. An
-		 * application that wants its own names narrowed reaches for the manager
-		 * it built rather than the container token.
+		 * The same binding under the name it had before the token carried its
+		 * package. Kept bound so an existing `container.make(...)` resolves.
 		 */
 		redis: QuasarManager<Record<string, ConnectionConfig>>;
 	}
