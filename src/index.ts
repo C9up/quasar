@@ -18,6 +18,8 @@
  *   await redis.connection().set('key', 'value')
  */
 
+import "./augmentations.js";
+
 export type {
 	ClusterConnectionConfig,
 	ConnectionConfig,

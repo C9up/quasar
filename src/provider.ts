@@ -11,6 +11,7 @@
  * blacklist, a cache store — finds it already seated.
  */
 
+import "./augmentations.js";
 import type { ConnectionConfig, QuasarConfig } from "./config.js";
 import type { QuasarLogger } from "./QuasarConnection.js";
 import { QuasarManager } from "./QuasarManager.js";

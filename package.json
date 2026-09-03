@@ -39,7 +39,8 @@
     "@biomejs/biome": "^2.4.10",
     "@types/node": "^22.19.15",
     "typescript": "^6.0.2",
-    "vitest": "^4.1.2"
+    "vitest": "^4.1.2",
+    "@c9up/ream": "^0.2.0"
   },
   "engines": {
     "node": ">=22.0.0"
@@ -76,5 +77,11 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/C9up/quasar.git"
+  },
+  "peerDependencies": {
+    "@c9up/ream": "^0.2.0"
+  },
+  "peerDependenciesMeta": {
+    "@c9up/ream": { "optional": true }
   }
 }
