@@ -69,11 +69,13 @@ LUA scripts go through `defineCommand` / `runCommand`; a script defined on the m
 
 ```ts
 await redis.subscribe('orders', (message, channel) => { /* … */ })
-await redis.psubscribe('user:*', (message, channel, pattern) => { /* … */ })
+await redis.psubscribe('user:*', (channel, message, pattern) => { /* … */ })
 await redis.publish('orders', JSON.stringify(order))
 ```
 
 Redis puts a subscribed client into a mode where it accepts nothing but subscribe/unsubscribe, so a connection that both publishes and listens needs two sockets. The second one opens **lazily**, on the first subscribe, and never at all for a connection that only runs commands — meanwhile ordinary commands keep working on the first.
+
+A pattern handler takes `(channel, message)` — the reverse of a channel handler's `(message, channel)`, and Adonis' order. It is deliberate: a pattern handler is called for channels it never named, so which one arrived is the first thing it needs. Both are strings, so getting them the wrong way round is silent.
 
 Subscribing twice to one channel **stacks** the handlers — both are called, as in Adonis. Pass the handler back to `unsubscribe` to drop just that one; the socket stays subscribed while others remain.
 
@@ -93,7 +95,9 @@ const memory = await new QuasarMemoryUsageCheck(redis.connection())
   .run()
 ```
 
-Both return `{ status: 'ok' | 'warning' | 'error', message }` rather than throwing — a health endpoint reports, it does not crash.
+Both return `{ status: 'ok' | 'warning' | 'error', message }` rather than throwing — a health endpoint reports, it does not crash. Neither sends a command to a connection that is not ready: ioredis would queue it rather than fail it, and a readiness probe that hangs is the outage it exists to report. A connection still dialling gets three seconds; one that has already failed gets none.
+
+The memory thresholds default to Adonis' 100 MB and 120 MB, so a check left unconfigured can still fail.
 
 ## Shutdown
 

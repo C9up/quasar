@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ConnectionConfig, QuasarConfig } from "../src/config.js";
 import QuasarProvider, { type QuasarAppContext } from "../src/provider.js";
 import { QuasarManager } from "../src/QuasarManager.js";
@@ -11,6 +11,7 @@ const config: QuasarConfig<Record<string, ConnectionConfig>> = {
 
 function appWith(
 	stored: Record<string, unknown>,
+	resolvable: Record<string, unknown> = {},
 ): QuasarAppContext & { bound: Map<unknown, unknown> } {
 	const bound = new Map<unknown, unknown>();
 	return {
@@ -22,6 +23,8 @@ function appWith(
 			singleton(token: unknown, factory: () => unknown) {
 				bound.set(token, factory());
 			},
+			has: (token: unknown) => typeof token === "string" && token in resolvable,
+			resolve: <T>(token: unknown) => resolvable[String(token)] as T,
 		},
 		config: { get: <T>(key: string) => stored[key] as T | undefined },
 	};
@@ -63,6 +66,51 @@ describe("QuasarProvider", () => {
 
 		await provider.shutdown();
 		expect(getQuasar()).toBeUndefined();
+	});
+});
+
+/**
+ * A connection failure has to reach the log the rest of the application writes
+ * to. The manager has always accepted a logger; nothing passed it one, so every
+ * failure went to the console — and the interface it asked for was pino's,
+ * which nothing in this framework is.
+ */
+describe("QuasarProvider > reporting through the application logger", () => {
+	it("hands the manager the one the container has", async () => {
+		const logger = { error: vi.fn() };
+		const provider = new QuasarProvider(appWith({ redis: config }, { logger }));
+		provider.register();
+		await provider.boot();
+
+		const manager = getQuasar();
+		if (!manager) throw new Error("the provider seated nothing");
+		manager.connection().ioConnection.emit("error", new Error("ECONNREFUSED"));
+
+		expect(logger.error).toHaveBeenCalledWith("Redis connection failure", {
+			err: expect.any(Error),
+			connection: "main",
+		});
+		await provider.shutdown();
+	});
+
+	// Absent is a normal state: ream declares the logger contract and binds
+	// none — an implementation package does.
+	it("boots without one", async () => {
+		const provider = new QuasarProvider(appWith({ redis: config }));
+		provider.register();
+
+		await expect(provider.boot()).resolves.toBeUndefined();
+		await provider.shutdown();
+	});
+
+	it("ignores something bound under that name that cannot report", async () => {
+		const provider = new QuasarProvider(
+			appWith({ redis: config }, { logger: "not a logger" }),
+		);
+		provider.register();
+
+		await expect(provider.boot()).resolves.toBeUndefined();
+		await provider.shutdown();
 	});
 });
 

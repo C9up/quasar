@@ -87,14 +87,14 @@ describe.skipIf(!live)("QuasarConnection against a live server", () => {
 		const prefix = `redis-test:${process.pid}:pattern`;
 		const seen: Array<[string, string, string]> = [];
 
-		await connection.psubscribe(`${prefix}:*`, (message, channel, pattern) => {
-			seen.push([message, channel, pattern]);
+		await connection.psubscribe(`${prefix}:*`, (channel, message, pattern) => {
+			seen.push([channel, message, pattern]);
 		});
 		await connection.publish(`${prefix}:one`, "first");
 
 		await expect
 			.poll(() => seen, { timeout: 5_000 })
-			.toEqual([["first", `${prefix}:one`, `${prefix}:*`]]);
+			.toEqual([[`${prefix}:one`, "first", `${prefix}:*`]]);
 	});
 
 	it("delivers to EVERY handler subscribed to a channel", async () => {

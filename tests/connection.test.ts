@@ -105,10 +105,10 @@ describe("quasar > an error does not take the process down", () => {
 
 		c.ioConnection.emit("error", failure);
 
-		expect(logger.error).toHaveBeenCalledWith(
-			{ err: failure, connection: "main" },
-			"Redis connection failure",
-		);
+		expect(logger.error).toHaveBeenCalledWith("Redis connection failure", {
+			err: failure,
+			connection: "main",
+		});
 	});
 
 	it("stops reporting, but keeps recording, after doNotLogErrors()", () => {
@@ -323,7 +323,11 @@ describe("quasar > pub/sub without a server answering", () => {
 		expect(second).toHaveBeenCalledWith("payload", "orders");
 	});
 
-	it("delivers a pattern message with the pattern that matched", async () => {
+	// `(channel, message)` is Adonis' order, and the reverse of a plain channel
+	// handler's on purpose: a pattern handler is called for channels it never
+	// named. Both are strings, so getting them the wrong way round is silent —
+	// which is the whole reason this is asserted rather than assumed.
+	it("delivers a pattern message channel-first, as Adonis does", async () => {
 		const c = connection();
 		const subscriber = await withSubscriber(c);
 		const handler = vi.fn();
@@ -331,7 +335,7 @@ describe("quasar > pub/sub without a server answering", () => {
 
 		subscriber.emit("pmessage", "user:*", "user:7", "payload");
 
-		expect(handler).toHaveBeenCalledWith("payload", "user:7", "user:*");
+		expect(handler).toHaveBeenCalledWith("user:7", "payload", "user:*");
 	});
 
 	it("drops nothing on a channel nobody is listening to", async () => {

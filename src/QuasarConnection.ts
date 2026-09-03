@@ -22,9 +22,15 @@ import {
  * Where connection errors are reported. Structural on purpose: quasar is a leaf
  * and must not import a framework logger. Adonis takes a required `Logger`; here
  * it is optional and falls back to the console, so the package stands alone.
+ *
+ * NAMED DEVIATION from Adonis' signature: Adonis' logger is pino, so it takes
+ * `error(payload, message)`. Ream's takes `error(message, data)`, and that is
+ * the shape a ream app can actually satisfy — declared the other way round,
+ * this was a parameter no logger in this universe fit, and the provider passed
+ * none at all.
  */
 export interface QuasarLogger {
-	error(payload: { err: unknown; connection: string }, message: string): void;
+	error(message: string, data?: Record<string, unknown>): void;
 }
 
 /**
@@ -69,10 +75,21 @@ export type ChannelHandler = (
 	message: string,
 	channel: string,
 ) => void | Promise<void>;
-/** Called with each message matching a subscribed pattern. */
+/**
+ * Called with each message matching a subscribed pattern.
+ *
+ * `(channel, message)` is Adonis' order, and it is deliberately NOT the
+ * `(message, channel)` of a plain channel handler: a pattern handler is called
+ * for channels it never named, so which one arrived is the first thing it
+ * needs. Getting the two the wrong way round is silent — both are strings —
+ * which is why this follows upstream rather than local symmetry.
+ *
+ * The pattern is passed third, a superset of Adonis, which stops at two: a
+ * handler registered for several patterns cannot otherwise tell them apart.
+ */
 export type PatternHandler = (
-	message: string,
 	channel: string,
+	message: string,
 	pattern: string,
 ) => void | Promise<void>;
 
@@ -108,7 +125,7 @@ export class QuasarConnection {
 	#lastError: unknown;
 	#lastSubscriberError: unknown;
 	#logErrors = true;
-	readonly #logger: QuasarLogger | undefined;
+	#logger: QuasarLogger | undefined;
 
 	constructor(name: string, config: ConnectionConfig, logger?: QuasarLogger) {
 		this.name = name;
@@ -125,6 +142,18 @@ export class QuasarConnection {
 			this.#lastError = undefined;
 		});
 		this.#forward();
+	}
+
+	/**
+	 * Report through this logger from now on.
+	 *
+	 * Connections open lazily and a framework logger is resolved from a
+	 * container asynchronously, so the two cannot always be ordered — the
+	 * provider hands one over once it has it.
+	 */
+	useLogger(logger: QuasarLogger): this {
+		this.#logger = logger;
+		return this;
 	}
 
 	/** Adonis names it `connectionName`; both spellings work. */
@@ -298,9 +327,7 @@ export class QuasarConnection {
 	/** Close both sockets with QUIT, letting in-flight commands finish. */
 	async quit(): Promise<void> {
 		await Promise.all(
-			[this.#client, this.#subscriber]
-				.filter(isPresent)
-				.map((client) => client.quit()),
+			[this.#client, this.#subscriber].filter(isPresent).map(quitClient),
 		);
 		this.#subscriber = undefined;
 	}
@@ -322,7 +349,7 @@ export class QuasarConnection {
 	 */
 	#report(error: unknown): void {
 		const payload = { err: error, connection: this.name };
-		if (this.#logger) this.#logger.error(payload, "Redis connection failure");
+		if (this.#logger) this.#logger.error("Redis connection failure", payload);
 		else console.error("[redis] connection failure", payload);
 	}
 
@@ -358,7 +385,7 @@ export class QuasarConnection {
 			"pmessage",
 			(pattern: string, channel: string, message: string) => {
 				for (const handler of this.#patterns.get(pattern) ?? []) {
-					this.#dispatch(() => handler(message, channel, pattern));
+					this.#dispatch(() => handler(channel, message, pattern));
 				}
 			},
 		);
@@ -382,6 +409,19 @@ export class QuasarConnection {
 		// purely about the failure reaching the logger.
 		subscriber.on("error", (error: unknown) => {
 			if (this.#logErrors) this.#report(error);
+		});
+		// `end` is ioredis giving up for good, not one failed attempt. The
+		// socket is cached, so keeping it means the next subscribe reuses an
+		// ended one — every command on it rejects and the application simply
+		// stops receiving, with the failure reported through `onError` as if
+		// the channel were at fault. Dropping it, and the subscriptions that
+		// only existed on it, is what makes the next subscribe open a live
+		// socket. Adonis does the same, for the same reason.
+		subscriber.on("end", () => {
+			if (this.#subscriber !== subscriber) return;
+			this.#subscriber = undefined;
+			this.#channels.clear();
+			this.#patterns.clear();
 		});
 
 		this.#subscriber = subscriber;
@@ -413,6 +453,28 @@ function toCount(value: unknown): number {
 
 function isPresent(client: RedisClient | undefined): client is RedisClient {
 	return client !== undefined;
+}
+
+/**
+ * QUIT one socket, or the nearest thing its status allows. Both guards are
+ * Adonis', and both matter on the path that always runs: shutdown.
+ *
+ * `wait` has never dialled — a lazily configured connection nothing ever used.
+ * QUIT is a command, so sending it would open a connection for the sole purpose
+ * of closing it, against a server that on a shutdown path may already be gone.
+ *
+ * `end` is already closed, and ioredis REJECTS every command issued on one
+ * ("Connection is closed."). That rejection travelled up through `Promise.all`
+ * and out of the provider's `shutdown`, so one socket that had died on its own
+ * aborted the shutdown of every other.
+ */
+async function quitClient(client: RedisClient): Promise<void> {
+	if (client.status === "wait") {
+		client.disconnect();
+		return;
+	}
+	if (client.status === "end") return;
+	await client.quit();
 }
 
 function makeClient(config: ConnectionConfig): RedisClient {

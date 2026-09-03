@@ -65,6 +65,7 @@ export interface QuasarManager<
 /** What the manager defines itself, and must not have overwritten by a command. */
 type ManagerOwnMethod =
 	| "connection"
+	| "useLogger"
 	| "subscribe"
 	| "unsubscribe"
 	| "psubscribe"
@@ -91,7 +92,7 @@ export class QuasarManager<
 	/** Scripts to replay onto every connection opened from here on. */
 	readonly #scripts = new Map<string, ScriptDefinition>();
 	#logErrors = true;
-	readonly #logger: QuasarLogger | undefined;
+	#logger: QuasarLogger | undefined;
 
 	constructor(config: QuasarConfig<Connections>, logger?: QuasarLogger) {
 		this.#config = config;
@@ -143,6 +144,19 @@ export class QuasarManager<
 		for (const [script, definition] of this.#scripts) {
 			connection.defineCommand(script, definition);
 		}
+		// Stop tracking it once its socket ends for good — ioredis reaches `end`
+		// when its retry strategy gives up. Without this the cache above hands
+		// the same dead connection back for the rest of the process: every
+		// command on it rejects, `activeConnections` still reports it open, and
+		// nothing ever opens a live one. Adonis drops it here too.
+		//
+		// Guarded on identity so a late `end` from a connection already replaced
+		// does not evict its successor.
+		connection.ioConnection.on("end", () => {
+			if (this.#connections.get(name) === connection) {
+				this.#connections.delete(name);
+			}
+		});
 		this.#connections.set(name, connection);
 		return connection;
 	}
@@ -198,6 +212,19 @@ export class QuasarManager<
 	/** Run a command registered with {@link defineCommand}, on the default connection. */
 	runCommand(command: string, ...args: unknown[]): unknown {
 		return this.connection().runCommand(command, ...args);
+	}
+
+	/**
+	 * Report connection failures through this logger, now and on every
+	 * connection opened later. The provider calls it once the container has
+	 * resolved one; until then failures go to the console.
+	 */
+	useLogger(logger: QuasarLogger): this {
+		this.#logger = logger;
+		for (const connection of this.#connections.values()) {
+			connection.useLogger(logger);
+		}
+		return this;
 	}
 
 	/**
