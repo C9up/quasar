@@ -50,3 +50,57 @@ describe("QuasarManager", () => {
 		expect(manager.activeConnectionNames).toEqual([]);
 	});
 });
+
+describe("QuasarManager > the façade must not promise more than the connection", () => {
+	/**
+	 * The manager is what an application calls. Declaring `subscribe` `async`
+	 * while it delegates to a `void` method is worse than the promise it
+	 * replaced: awaiting `undefined` resolves before the subscription has even
+	 * been attempted, so `await manager.subscribe(...)` would guarantee less
+	 * than nothing. Only the connection was aligned at first; this is the half
+	 * that is actually reached from an app.
+	 */
+	/** Fails fast instead of retrying, so a failure is a failure. */
+	const OFFLINE = {
+		host: "127.0.0.1",
+		port: 6379,
+		lazyConnect: true,
+		enableOfflineQueue: false,
+		retryStrategy: () => null,
+	} as const;
+
+	const offlineConfig: QuasarConfig<Record<string, ConnectionConfig>> = {
+		connection: "main",
+		connections: { main: { ...OFFLINE } },
+	};
+
+	function manager(): QuasarManager<Record<string, ConnectionConfig>> {
+		return new QuasarManager(offlineConfig);
+	}
+
+	it("subscribe answers void, not a promise", () => {
+		const m = manager();
+		expect(m.subscribe("orders", () => {})).toBeUndefined();
+		expect(m.psubscribe("user:*", () => {})).toBeUndefined();
+	});
+
+	it("subscribed rejects when the channel cannot be subscribed", async () => {
+		// Nothing is listening on the configured port, so the subscribe fails.
+		// The awaitable form has to say so — that is its whole reason to exist.
+		const m = manager();
+		await expect(m.subscribed("orders", () => {})).rejects.toThrow();
+		await expect(m.psubscribed("user:*", () => {})).rejects.toThrow();
+	});
+
+	it("reaches the DEFAULT connection", async () => {
+		const m = manager();
+		const calls: string[] = [];
+		const connection = m.connection();
+		connection.subscribed = (channel: string) => {
+			calls.push(channel);
+			return Promise.resolve();
+		};
+		await m.subscribed("orders", () => {});
+		expect(calls).toEqual(["orders"]);
+	});
+});

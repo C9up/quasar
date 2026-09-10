@@ -31,9 +31,11 @@ export interface QuasarService {
 	readonly activeConnections: Record<string, QuasarConnection>;
 	readonly activeConnectionsCount: number;
 	connection(name?: string): QuasarConnection;
-	subscribe(channel: string, handler: ChannelHandler): Promise<void>;
+	subscribe(channel: string, handler: ChannelHandler): void;
+	subscribed(channel: string, handler: ChannelHandler): Promise<void>;
 	unsubscribe(channel: string, handler?: ChannelHandler): Promise<void>;
-	psubscribe(pattern: string, handler: PatternHandler): Promise<void>;
+	psubscribe(pattern: string, handler: PatternHandler): void;
+	psubscribed(pattern: string, handler: PatternHandler): Promise<void>;
 	punsubscribe(pattern: string, handler?: PatternHandler): Promise<void>;
 	publish(channel: string, message: string): Promise<number>;
 	defineCommand(name: string, definition: ScriptDefinition): QuasarService;
@@ -161,13 +163,30 @@ export class QuasarManager<
 		return connection;
 	}
 
-	/** Subscribe on the default connection. */
-	async subscribe(
+	/**
+	 * Subscribe on the default connection.
+	 *
+	 * `void`, matching the connection and upstream. Declared `async` it would
+	 * be worse than the promise it replaced: delegating to a `void` method and
+	 * awaiting `undefined` resolves before the subscription is even attempted,
+	 * so `await manager.subscribe(...)` would guarantee less than nothing.
+	 * {@link subscribed} is the awaitable form.
+	 */
+	subscribe(
+		channel: string,
+		handler: ChannelHandler,
+		options?: PubSubOptions,
+	): void {
+		this.connection().subscribe(channel, handler, options);
+	}
+
+	/** {@link subscribe}, awaitable and rejecting — see `QuasarConnection`. */
+	subscribed(
 		channel: string,
 		handler: ChannelHandler,
 		options?: PubSubOptions,
 	): Promise<void> {
-		return this.connection().subscribe(channel, handler, options);
+		return this.connection().subscribed(channel, handler, options);
 	}
 
 	/** Unsubscribe on the default connection. */
@@ -175,13 +194,22 @@ export class QuasarManager<
 		return this.connection().unsubscribe(channel, handler);
 	}
 
-	/** Pattern-subscribe on the default connection. */
-	async psubscribe(
+	/** Pattern-subscribe on the default connection. `void`, see {@link subscribe}. */
+	psubscribe(
+		pattern: string,
+		handler: PatternHandler,
+		options?: PubSubOptions,
+	): void {
+		this.connection().psubscribe(pattern, handler, options);
+	}
+
+	/** {@link psubscribe}, awaitable and rejecting. */
+	psubscribed(
 		pattern: string,
 		handler: PatternHandler,
 		options?: PubSubOptions,
 	): Promise<void> {
-		return this.connection().psubscribe(pattern, handler, options);
+		return this.connection().psubscribed(pattern, handler, options);
 	}
 
 	/** Pattern-unsubscribe on the default connection. */
