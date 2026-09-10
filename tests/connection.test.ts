@@ -183,7 +183,12 @@ describe("quasar > pub/sub without a server answering", () => {
 	 * to reach the dispatch logic without a live server.
 	 */
 	const withSubscriber = async (c: QuasarConnection) => {
-		await c.subscribe("warm-up", () => {});
+		// This subscribe FAILS (no server), and failing is what opens the socket
+		// the stubs below attach to. Awaited through the rejecting form so the
+		// failure is fully reported before a test clears its spies — the
+		// fire-and-forget form leaves it in flight, and its late error lands in
+		// the middle of whatever runs next.
+		await c.subscribed("warm-up", () => {}).catch(() => undefined);
 		const subscriber = c.ioSubscriberConnection;
 		if (!subscriber) throw new Error("the subscribe should have opened one");
 		vi.spyOn(subscriber, "subscribe").mockResolvedValue(1);
@@ -201,7 +206,7 @@ describe("quasar > pub/sub without a server answering", () => {
 			{ error: (payload: unknown) => errors.push(payload) },
 		);
 		const subscriber = await withSubscriber(c);
-		await c.subscribe("orders", () =>
+		await c.subscribed("orders", () =>
 			Promise.reject(new Error("handler blew up")),
 		);
 
@@ -228,11 +233,11 @@ describe("quasar > pub/sub without a server answering", () => {
 		// exists, so a synchronous throw never reached the `.catch`: it unwound
 		// the dispatch loop and escaped into the Redis client's own callback,
 		// taking every later handler on the channel with it.
-		await c.subscribe("orders", () => {
+		await c.subscribed("orders", () => {
 			reached.push("first");
 			throw new Error("sync boom");
 		});
-		await c.subscribe("orders", () => {
+		await c.subscribed("orders", () => {
 			reached.push("second");
 		});
 
@@ -255,12 +260,29 @@ describe("quasar > pub/sub without a server answering", () => {
 		);
 
 		// A subscribe that throws inside a boot sequence takes the app down.
-		await expect(
-			c.subscribe("orders", () => {}, { onError }),
-		).resolves.toBeUndefined();
+		// It answers `void`, as upstream does — there is nothing to await and
+		// nothing to catch.
+		expect(c.subscribe("orders", () => {}, { onError })).toBeUndefined();
+		await vi.waitFor(() => expect(onError).toHaveBeenCalledWith(failure));
 
-		expect(onError).toHaveBeenCalledWith(failure);
 		expect(emitted[0]?.error).toBe(failure);
+	});
+
+	it("rejects from subscribed(), which is the awaitable form", async () => {
+		const c = connection();
+		const subscriber = await withSubscriber(c);
+		const failure = new Error("NOAUTH");
+		vi.spyOn(subscriber, "subscribe").mockRejectedValue(failure);
+		const onError = vi.fn();
+
+		// The whole point of the named addition: awaiting it means something.
+		// The old `Promise<void>` RESOLVED on failure, so a caller who awaited
+		// carried on believing it was subscribed.
+		await expect(c.subscribed("orders", () => {}, { onError })).rejects.toBe(
+			failure,
+		);
+		// Reporting is identical — a caller can have both.
+		expect(onError).toHaveBeenCalledWith(failure);
 	});
 
 	it("does the same for a pattern subscribe", async () => {
@@ -274,12 +296,18 @@ describe("quasar > pub/sub without a server answering", () => {
 			emitted.push(e),
 		);
 
-		await expect(
-			c.psubscribe("user:*", () => {}, { onError }),
-		).resolves.toBeUndefined();
+		expect(c.psubscribe("user:*", () => {}, { onError })).toBeUndefined();
+		await vi.waitFor(() => expect(onError).toHaveBeenCalledWith(failure));
 
-		expect(onError).toHaveBeenCalledWith(failure);
 		expect(emitted[0]?.error).toBe(failure);
+	});
+
+	it("rejects from psubscribed() too", async () => {
+		const c = connection();
+		const subscriber = await withSubscriber(c);
+		const failure = new Error("NOAUTH");
+		vi.spyOn(subscriber, "psubscribe").mockRejectedValue(failure);
+		await expect(c.psubscribed("user:*", () => {})).rejects.toBe(failure);
 	});
 
 	it("logs a failed subscribe as well as reporting it", async () => {
@@ -289,8 +317,9 @@ describe("quasar > pub/sub without a server answering", () => {
 		vi.spyOn(subscriber, "subscribe").mockRejectedValue(new Error("NOAUTH"));
 		logger.error.mockClear();
 
-		await c.subscribe("orders", () => {});
-
+		// The rejecting form, so the log is written before the assertion runs;
+		// the void form would leave the reporting in flight.
+		await c.subscribed("orders", () => {}).catch(() => undefined);
 		expect(logger.error).toHaveBeenCalledOnce();
 	});
 
@@ -303,7 +332,7 @@ describe("quasar > pub/sub without a server answering", () => {
 			ready.push(e),
 		);
 
-		await c.subscribe("orders", () => {}, { onSubscription });
+		await c.subscribed("orders", () => {}, { onSubscription });
 
 		expect(onSubscription).toHaveBeenCalledWith(1);
 		expect(ready[0]?.count).toBe(1);
@@ -314,8 +343,8 @@ describe("quasar > pub/sub without a server answering", () => {
 		const subscriber = await withSubscriber(c);
 		const first = vi.fn();
 		const second = vi.fn();
-		await c.subscribe("orders", first);
-		await c.subscribe("orders", second);
+		await c.subscribed("orders", first);
+		await c.subscribed("orders", second);
 
 		subscriber.emit("message", "orders", "payload");
 
@@ -331,7 +360,7 @@ describe("quasar > pub/sub without a server answering", () => {
 		const c = connection();
 		const subscriber = await withSubscriber(c);
 		const handler = vi.fn();
-		await c.psubscribe("user:*", handler);
+		await c.psubscribed("user:*", handler);
 
 		subscriber.emit("pmessage", "user:*", "user:7", "payload");
 
@@ -355,8 +384,8 @@ describe("quasar > pub/sub without a server answering", () => {
 		const subscriber = await withSubscriber(c);
 		const first = vi.fn();
 		const second = vi.fn();
-		await c.subscribe("orders", first);
-		await c.subscribe("orders", second);
+		await c.subscribed("orders", first);
+		await c.subscribed("orders", second);
 
 		await c.unsubscribe("orders", first);
 		subscriber.emit("message", "orders", "payload");
@@ -371,7 +400,7 @@ describe("quasar > pub/sub without a server answering", () => {
 		const c = connection();
 		const subscriber = await withSubscriber(c);
 		const handler = vi.fn();
-		await c.subscribe("orders", handler);
+		await c.subscribed("orders", handler);
 
 		await c.unsubscribe("orders", handler);
 
@@ -381,8 +410,8 @@ describe("quasar > pub/sub without a server answering", () => {
 	it("leaves the channel outright when no handler is named", async () => {
 		const c = connection();
 		const subscriber = await withSubscriber(c);
-		await c.subscribe("orders", () => {});
-		await c.subscribe("orders", () => {});
+		await c.subscribed("orders", () => {});
+		await c.subscribed("orders", () => {});
 
 		await c.unsubscribe("orders");
 
@@ -394,8 +423,8 @@ describe("quasar > pub/sub without a server answering", () => {
 		const subscriber = await withSubscriber(c);
 		const first = vi.fn();
 		const second = vi.fn();
-		await c.psubscribe("user:*", first);
-		await c.psubscribe("user:*", second);
+		await c.psubscribed("user:*", first);
+		await c.psubscribed("user:*", second);
 
 		await c.punsubscribe("user:*", first);
 		expect(subscriber.punsubscribe).not.toHaveBeenCalledWith("user:*");

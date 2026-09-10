@@ -53,7 +53,7 @@ describe.skipIf(!live)("QuasarConnection against a live server", () => {
 		const connection = open();
 		expect(connection.ioSubscriberConnection).toBeUndefined();
 
-		await connection.subscribe(`redis-test:${process.pid}:lazy`, () => {});
+		await connection.subscribed(`redis-test:${process.pid}:lazy`, () => {});
 		expect(connection.ioSubscriberConnection).toBeDefined();
 	});
 
@@ -62,7 +62,7 @@ describe.skipIf(!live)("QuasarConnection against a live server", () => {
 		const channel = `redis-test:${process.pid}:channel`;
 		const received: string[] = [];
 
-		await connection.subscribe(channel, (message) => {
+		await connection.subscribed(channel, (message) => {
 			received.push(message);
 		});
 		await connection.publish(channel, "hello");
@@ -75,7 +75,7 @@ describe.skipIf(!live)("QuasarConnection against a live server", () => {
 		const channel = `redis-test:${process.pid}:mixed`;
 		const key = `redis-test:${process.pid}:mixed-key`;
 
-		await connection.subscribe(channel, () => {});
+		await connection.subscribed(channel, () => {});
 		// On a single socket Redis answers this with "only (P)SUBSCRIBE ... allowed".
 		await connection.set(key, "still-works", "EX", 30);
 		expect(await connection.get(key)).toBe("still-works");
@@ -87,7 +87,7 @@ describe.skipIf(!live)("QuasarConnection against a live server", () => {
 		const prefix = `redis-test:${process.pid}:pattern`;
 		const seen: Array<[string, string, string]> = [];
 
-		await connection.psubscribe(`${prefix}:*`, (channel, message, pattern) => {
+		await connection.psubscribed(`${prefix}:*`, (channel, message, pattern) => {
 			seen.push([channel, message, pattern]);
 		});
 		await connection.publish(`${prefix}:one`, "first");
@@ -105,10 +105,10 @@ describe.skipIf(!live)("QuasarConnection against a live server", () => {
 		// Two modules listening to one channel both get the message (Adonis
 		// semantics). Replacing would make the second subscribe silently stop
 		// the first.
-		await connection.subscribe(channel, () => {
+		await connection.subscribed(channel, () => {
 			calls.push("first");
 		});
-		await connection.subscribe(channel, () => {
+		await connection.subscribed(channel, () => {
 			calls.push("second");
 		});
 		await connection.publish(channel, "once");
@@ -126,8 +126,8 @@ describe.skipIf(!live)("QuasarConnection against a live server", () => {
 			calls.push("first");
 		};
 
-		await connection.subscribe(channel, first);
-		await connection.subscribe(channel, () => {
+		await connection.subscribed(channel, first);
+		await connection.subscribed(channel, () => {
 			calls.push("second");
 		});
 		await connection.unsubscribe(channel, first);
@@ -143,7 +143,7 @@ describe.skipIf(!live)("QuasarConnection against a live server", () => {
 		const channel = `redis-test:${process.pid}:unsub`;
 		const calls: string[] = [];
 
-		await connection.subscribe(channel, (message) => {
+		await connection.subscribed(channel, (message) => {
 			calls.push(message);
 		});
 		await connection.publish(channel, "before");
@@ -157,7 +157,7 @@ describe.skipIf(!live)("QuasarConnection against a live server", () => {
 
 	it("closes both sockets on quit", async () => {
 		const connection = new QuasarConnection("quit", { url, db: 15 });
-		await connection.subscribe(`redis-test:${process.pid}:quit`, () => {});
+		await connection.subscribed(`redis-test:${process.pid}:quit`, () => {});
 		expect(connection.ioSubscriberConnection).toBeDefined();
 
 		await connection.quit();

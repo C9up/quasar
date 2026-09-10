@@ -116,7 +116,7 @@ describeLive("QuasarConnection > subscriber lifecycle (live server)", () => {
 		// The socket is opened lazily by the first subscribe — before that there
 		// is nothing an app could have attached a listener to, which is the whole
 		// reason these are re-emitted on the command connection.
-		await connection.subscribe(`quasar-sub:${process.pid}`, () => {});
+		await connection.subscribed(`quasar-sub:${process.pid}`, () => {});
 
 		await expect.poll(() => seen, { timeout: 5_000 }).toEqual(["ready"]);
 	});
@@ -125,7 +125,7 @@ describeLive("QuasarConnection > subscriber lifecycle (live server)", () => {
 		manager = new QuasarManager(config);
 		const connection = manager.connection();
 		connection.doNotLogErrors();
-		await connection.subscribe(`quasar-err:${process.pid}`, () => {});
+		await connection.subscribed(`quasar-err:${process.pid}`, () => {});
 
 		const subscriber = connection.ioSubscriberConnection;
 		expect(subscriber).toBeDefined();
@@ -156,7 +156,7 @@ describeLive("QuasarConnection > subscription events (live server)", () => {
 			seen.push(payload.count);
 		});
 
-		await connection.subscribe(`quasar-ev:${process.pid}`, () => {});
+		await connection.subscribed(`quasar-ev:${process.pid}`, () => {});
 
 		// Adonis reports the subscription through this event; an app can rely on
 		// it without awaiting the call.
@@ -171,7 +171,7 @@ describeLive("QuasarConnection > subscription events (live server)", () => {
 			seen.push(payload.count);
 		});
 
-		await connection.psubscribe(`quasar-pev:${process.pid}:*`, () => {});
+		await connection.psubscribed(`quasar-pev:${process.pid}:*`, () => {});
 
 		await expect.poll(() => seen, { timeout: 5_000 }).toEqual([1]);
 	});
@@ -187,7 +187,7 @@ describeLive("QuasarConnection > subscription events (live server)", () => {
 		const viaCallback: unknown[] = [];
 
 		// Close the socket the subscribe would use, so the command fails.
-		await connection.subscribe(`quasar-warm:${process.pid}`, () => {});
+		await connection.subscribed(`quasar-warm:${process.pid}`, () => {});
 		await connection.ioSubscriberConnection?.quit();
 
 		// Adonis' subscribe returns void, so migrated code never awaits it — a

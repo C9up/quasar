@@ -96,7 +96,7 @@ describe("quasar > a subscriber socket that ended is replaced", () => {
 	 */
 	it("opens a fresh one on the next subscribe", async () => {
 		const c = connection();
-		await c.subscribe("chan", () => {});
+		c.subscribe("chan", () => {});
 		const dead = c.ioSubscriberConnection;
 		expect(dead).toBeDefined();
 
@@ -105,7 +105,7 @@ describe("quasar > a subscriber socket that ended is replaced", () => {
 
 		expect(c.ioSubscriberConnection).toBeUndefined();
 
-		await c.subscribe("other", () => {});
+		c.subscribe("other", () => {});
 		expect(c.ioSubscriberConnection).toBeDefined();
 		expect(c.ioSubscriberConnection).not.toBe(dead);
 	});
@@ -118,12 +118,12 @@ describe("quasar > a subscriber socket that ended is replaced", () => {
 	it("forgets the subscriptions that lived on it", async () => {
 		const c = connection();
 		const handler = vi.fn();
-		await c.subscribe("chan", handler);
+		c.subscribe("chan", handler);
 		const dead = c.ioSubscriberConnection;
 
 		dead?.disconnect();
 		await settled();
-		await c.subscribe("other", () => {});
+		c.subscribe("other", () => {});
 
 		// The dead socket cannot deliver, and the live one never joined "chan".
 		c.ioSubscriberConnection?.emit("message", "chan", "payload");

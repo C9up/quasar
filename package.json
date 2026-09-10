@@ -1,6 +1,6 @@
 {
   "name": "@c9up/quasar",
-  "version": "0.1.5",
+  "version": "0.2.0",
   "description": "Quasar — Redis connections for the Ream framework: named connections, pub/sub, health checks",
   "license": "MIT",
   "type": "module",

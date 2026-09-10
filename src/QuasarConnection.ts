@@ -248,21 +248,48 @@ export class QuasarConnection {
 	 * calls reuse it. Subscribing twice STACKS the handlers — both are called,
 	 * matching Adonis.
 	 *
-	 * NAMED DEVIATION — upstream declares this `void`; here it is
-	 * `Promise<void>`. Only the type differs: a caller written the upstream way,
-	 * never awaiting and reacting through `onSubscription`, behaves identically,
-	 * because a promise nobody awaits is a promise nobody notices.
+	 * Answers `void`, as upstream does. It used to answer `Promise<void>`, and
+	 * that promise was worse than none: the catch below RESOLVES it, so
+	 * `await subscribe(...)` completed just the same when the subscription had
+	 * failed. It looked like a guarantee and was not one.
 	 *
-	 * What the promise buys is the guarantee that the subscription is live when
-	 * the next line runs. Sixty-five call sites across this package and its
-	 * siblings await it before publishing; declaring `void` would turn every one
-	 * of them into a race that passes locally and fails under load. Errors do
-	 * NOT reject it — see the catch below.
+	 * Failure arrives through `onError`, the `subscription:error` event and the
+	 * connection logger. When you need to know the subscription is live before
+	 * the next line runs, use {@link subscribed}.
 	 */
-	async subscribe(
+	subscribe(
 		channel: string,
 		handler: ChannelHandler,
 		options?: PubSubOptions,
+	): void {
+		void this.#subscribeChannel(channel, handler, options);
+	}
+
+	/**
+	 * `subscribe`, awaitable — a named Ream addition, not upstream's shape.
+	 *
+	 * Resolves once the channel is live and REJECTS if it could not be
+	 * subscribed, so awaiting it means what awaiting should mean. `onError`
+	 * still fires, so a caller can have both.
+	 */
+	async subscribed(
+		channel: string,
+		handler: ChannelHandler,
+		options?: PubSubOptions,
+	): Promise<void> {
+		await this.#subscribeChannel(channel, handler, options, true);
+	}
+
+	/**
+	 * The subscription itself. `rethrow` is what separates the two entry
+	 * points: reporting is identical, only the caller's ability to see the
+	 * failure differs.
+	 */
+	async #subscribeChannel(
+		channel: string,
+		handler: ChannelHandler,
+		options: PubSubOptions | undefined,
+		rethrow = false,
 	): Promise<void> {
 		const subscriber = this.#ensureSubscriber();
 		let count: number;
@@ -272,6 +299,7 @@ export class QuasarConnection {
 			options?.onError?.(error);
 			this.#client.emit("subscription:error", { connection: this, error });
 			if (this.#logErrors) this.#report(error);
+			if (rethrow) throw error;
 			return;
 		}
 		const handlers = this.#channels.get(channel);
@@ -279,6 +307,52 @@ export class QuasarConnection {
 		else this.#channels.set(channel, new Set([handler]));
 		options?.onSubscription?.(count);
 		this.#client.emit("subscription:ready", { connection: this, count });
+	}
+
+	/**
+	 * Listen to every channel matching a glob pattern (`user:*`). Answers
+	 * `void`, as upstream does — see {@link subscribe}; {@link psubscribed} is
+	 * the awaitable form.
+	 */
+	psubscribe(
+		pattern: string,
+		handler: PatternHandler,
+		options?: PubSubOptions,
+	): void {
+		void this.#subscribePattern(pattern, handler, options);
+	}
+
+	/** `psubscribe`, awaitable and rejecting — see {@link subscribed}. */
+	async psubscribed(
+		pattern: string,
+		handler: PatternHandler,
+		options?: PubSubOptions,
+	): Promise<void> {
+		await this.#subscribePattern(pattern, handler, options, true);
+	}
+
+	async #subscribePattern(
+		pattern: string,
+		handler: PatternHandler,
+		options: PubSubOptions | undefined,
+		rethrow = false,
+	): Promise<void> {
+		const subscriber = this.#ensureSubscriber();
+		let count: number;
+		try {
+			count = toCount(await subscriber.psubscribe(pattern));
+		} catch (error) {
+			options?.onError?.(error);
+			this.#client.emit("psubscription:error", { connection: this, error });
+			if (this.#logErrors) this.#report(error);
+			if (rethrow) throw error;
+			return;
+		}
+		const handlers = this.#patterns.get(pattern);
+		if (handlers) handlers.add(handler);
+		else this.#patterns.set(pattern, new Set([handler]));
+		options?.onSubscription?.(count);
+		this.#client.emit("psubscription:ready", { connection: this, count });
 	}
 
 	/**
@@ -294,29 +368,6 @@ export class QuasarConnection {
 		}
 		this.#channels.delete(channel);
 		if (this.#subscriber) await this.#subscriber.unsubscribe(channel);
-	}
-
-	/** Listen to every channel matching a glob pattern (`user:*`). */
-	async psubscribe(
-		pattern: string,
-		handler: PatternHandler,
-		options?: PubSubOptions,
-	): Promise<void> {
-		const subscriber = this.#ensureSubscriber();
-		let count: number;
-		try {
-			count = toCount(await subscriber.psubscribe(pattern));
-		} catch (error) {
-			options?.onError?.(error);
-			this.#client.emit("psubscription:error", { connection: this, error });
-			if (this.#logErrors) this.#report(error);
-			return;
-		}
-		const handlers = this.#patterns.get(pattern);
-		if (handlers) handlers.add(handler);
-		else this.#patterns.set(pattern, new Set([handler]));
-		options?.onSubscription?.(count);
-		this.#client.emit("psubscription:ready", { connection: this, count });
 	}
 
 	/** Stop listening to a pattern; with a handler, only that one is dropped. */
