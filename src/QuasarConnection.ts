@@ -247,6 +247,17 @@ export class QuasarConnection {
 	 * Listen to a channel. The first call opens the subscriber socket; later
 	 * calls reuse it. Subscribing twice STACKS the handlers — both are called,
 	 * matching Adonis.
+	 *
+	 * NAMED DEVIATION — upstream declares this `void`; here it is
+	 * `Promise<void>`. Only the type differs: a caller written the upstream way,
+	 * never awaiting and reacting through `onSubscription`, behaves identically,
+	 * because a promise nobody awaits is a promise nobody notices.
+	 *
+	 * What the promise buys is the guarantee that the subscription is live when
+	 * the next line runs. Sixty-five call sites across this package and its
+	 * siblings await it before publishing; declaring `void` would turn every one
+	 * of them into a race that passes locally and fails under load. Errors do
+	 * NOT reject it — see the catch below.
 	 */
 	async subscribe(
 		channel: string,
