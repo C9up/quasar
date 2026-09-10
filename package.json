@@ -1,7 +1,7 @@
 {
   "name": "@c9up/quasar",
   "version": "0.1.5",
-  "description": "Quasar \u2014 Redis connections for the Ream framework: named connections, pub/sub, health checks",
+  "description": "Quasar — Redis connections for the Ream framework: named connections, pub/sub, health checks",
   "license": "MIT",
   "type": "module",
   "main": "./src/index.ts",
@@ -36,12 +36,12 @@
     "ioredis": "^6.0.0"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.4.10",
-    "@types/node": "^22.19.15",
-    "@vitest/coverage-v8": "^4.1.2",
-    "typescript": "^6.0.2",
-    "vitest": "^4.1.2",
-    "@c9up/ream": "^0.2.0"
+    "@biomejs/biome": "^2.5.12",
+    "@c9up/ream": "^0.2.0",
+    "@types/node": "^22.20.1",
+    "@vitest/coverage-v8": "4.1.11",
+    "typescript": "^6.0.3",
+    "vitest": "4.1.11"
   },
   "engines": {
     "node": ">=22.0.0"
@@ -83,6 +83,8 @@
     "@c9up/ream": "^0.2.0"
   },
   "peerDependenciesMeta": {
-    "@c9up/ream": { "optional": true }
+    "@c9up/ream": {
+      "optional": true
+    }
   }
 }
