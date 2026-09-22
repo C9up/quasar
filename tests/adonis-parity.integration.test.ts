@@ -190,14 +190,29 @@ describeLive("QuasarConnection > subscription events (live server)", () => {
 		await connection.subscribed(`quasar-warm:${process.pid}`, () => {});
 		await connection.ioSubscriberConnection?.quit();
 
-		// Adonis' subscribe returns void, so migrated code never awaits it — a
-		// rejection nobody handles would take the process down.
-		await expect(
-			connection.subscribe(`quasar-dead:${process.pid}`, () => {}, {
-				onError: (error) => viaCallback.push(error),
-			}),
-		).resolves.toBeUndefined();
+		// Upstream's `subscribe` answers `void` — read off @adonisjs/redis 11's
+		// `abstract_connection.d.ts` — so migrated code never awaits it, and a
+		// rejection nobody handles would take the process down. The failure has
+		// to arrive through `onError` and the event instead.
+		//
+		// This used to read `await expect(subscribe(...)).resolves`, which
+		// vitest refuses on a non-promise: the assertion could only ever have
+		// passed against the `Promise<void>` this deliberately stopped
+		// returning. Waiting on `onError` is enough to see both reports — the
+		// event is emitted synchronously on the next line, before this
+		// microtask resumes.
+		let returned: unknown = "subscribe was not called";
+		const failed = new Promise<void>((resolve) => {
+			returned = connection.subscribe(`quasar-dead:${process.pid}`, () => {}, {
+				onError: (error) => {
+					viaCallback.push(error);
+					resolve();
+				},
+			});
+		});
+		await failed;
 
+		expect(returned).toBeUndefined();
 		expect(viaCallback).toHaveLength(1);
 		expect(errors).toHaveLength(1);
 	});
