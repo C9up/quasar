@@ -10,8 +10,9 @@
 import { Redis } from "ioredis";
 import { afterAll, describe, expect, it } from "vitest";
 import { QuasarConnection } from "../src/QuasarConnection.js";
+import { redisTestUrl } from "./_support/redisTestUrl.js";
 
-const url = process.env.REDIS_TEST_URL ?? "redis://127.0.0.1:6379";
+const url = redisTestUrl();
 
 async function serverAnswers(): Promise<boolean> {
 	const probe = new Redis(url, { lazyConnect: true, maxRetriesPerRequest: 1 });

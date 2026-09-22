@@ -6,17 +6,18 @@
 import { Redis } from "ioredis";
 import { afterEach, describe, expect, it } from "vitest";
 import { QuasarManager } from "../src/QuasarManager.js";
+import { redisTestUrl } from "./_support/redisTestUrl.js";
 
-const url = process.env.REDIS_TEST_URL ?? "redis://127.0.0.1:6379";
+const url = redisTestUrl();
 const config = {
 	connection: "main" as const,
 	connections: { main: { url }, cache: { url } },
 };
 
 /**
- * Skipped, not failed, when no server answers — same probe as
- * `connection.integration.test.ts`. CI has no Redis service, and a contributor
- * without one still gets a green suite.
+ * Skipped, not failed, when the configured server does not answer — same probe
+ * as `connection.integration.test.ts`. Which server that is has to be stated:
+ * see `_support/redisTestUrl.ts`.
  */
 async function serverAnswers(): Promise<boolean> {
 	const probe = new Redis(url, { lazyConnect: true, maxRetriesPerRequest: 1 });
