@@ -7,6 +7,8 @@
  * installed AND working.
  */
 
+import { stubsRoot } from "./stubs.js";
+
 interface Codemods {
 	addProvider(importPath: string): Promise<void>;
 	addEnvVars(vars: Record<string, string>): Promise<void>;
@@ -15,6 +17,12 @@ interface Codemods {
 		content: string,
 		options?: { force?: boolean },
 	): Promise<void>;
+	makeUsingStub(
+		stubsRoot: string,
+		stubPath: string,
+		state?: Record<string, string | number | boolean>,
+		options?: { force?: boolean },
+	): Promise<{ path: string; contents: string }>;
 }
 
 export async function configure(codemods: Codemods): Promise<void> {
@@ -28,22 +36,5 @@ export async function configure(codemods: Codemods): Promise<void> {
 	});
 
 	await codemods.addProvider("@c9up/quasar/provider");
-	await codemods.writeFile(
-		"config/redis.ts",
-		`import { defineConfig } from '@c9up/quasar'
-import env from '#start/env'
-
-export default defineConfig({
-  // The connection \`redis.connection()\` hands back with no argument.
-  connection: 'main',
-
-  connections: {
-    main: {
-      host: env.get('REDIS_HOST', '127.0.0.1'),
-      port: Number(env.get('REDIS_PORT', '6379')),
-      password: env.get('REDIS_PASSWORD', ''),
-    },
-  },
-})`,
-	);
+	await codemods.makeUsingStub(stubsRoot, "config/redis.stub");
 }

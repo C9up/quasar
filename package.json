@@ -1,6 +1,6 @@
 {
   "name": "@c9up/quasar",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Quasar — Redis connections for the Ream framework: named connections, pub/sub, health checks",
   "license": "MIT",
   "type": "module",
@@ -37,7 +37,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.12",
-    "@c9up/ream": "^0.2.0",
+    "@c9up/ream": "^0.2.26",
     "@types/node": "^22.20.1",
     "@vitest/coverage-v8": "4.1.11",
     "typescript": "^6.0.3",
@@ -50,6 +50,7 @@
   "files": [
     "src",
     "dist",
+    "stubs",
     "README.md",
     "LICENSE"
   ],
@@ -81,7 +82,7 @@
     "url": "git+https://github.com/C9up/quasar.git"
   },
   "peerDependencies": {
-    "@c9up/ream": "^0.2.0"
+    "@c9up/ream": "^0.2.26"
   },
   "peerDependenciesMeta": {
     "@c9up/ream": {

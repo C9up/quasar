@@ -1,0 +1,18 @@
+---
+to: config/redis.ts
+---
+import { defineConfig } from '@c9up/quasar'
+import env from '#start/env'
+
+export default defineConfig({
+  // The connection `redis.connection()` hands back with no argument.
+  connection: 'main',
+
+  connections: {
+    main: {
+      host: env.get('REDIS_HOST', '127.0.0.1'),
+      port: Number(env.get('REDIS_PORT', '6379')),
+      password: env.get('REDIS_PASSWORD', ''),
+    },
+  },
+})
