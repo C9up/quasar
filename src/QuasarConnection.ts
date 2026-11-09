@@ -292,19 +292,22 @@ export class QuasarConnection {
 		rethrow = false,
 	): Promise<void> {
 		const subscriber = this.#ensureSubscriber();
+		// Registered BEFORE the ack is awaited. ioredis resolves the SUBSCRIBE
+		// while parsing a reply chunk and emits the messages that follow in
+		// that chunk synchronously, so a handler added after the `await` misses
+		// them. NAMED DEVIATION: upstream registers after the ack and drops them.
+		const added = register(this.#channels, channel, handler);
 		let count: number;
 		try {
 			count = toCount(await subscriber.subscribe(channel));
 		} catch (error) {
+			if (added) unregister(this.#channels, channel, handler);
 			options?.onError?.(error);
 			this.#client.emit("subscription:error", { connection: this, error });
 			if (this.#logErrors) this.#report(error);
 			if (rethrow) throw error;
 			return;
 		}
-		const handlers = this.#channels.get(channel);
-		if (handlers) handlers.add(handler);
-		else this.#channels.set(channel, new Set([handler]));
 		options?.onSubscription?.(count);
 		this.#client.emit("subscription:ready", { connection: this, count });
 	}
@@ -338,19 +341,19 @@ export class QuasarConnection {
 		rethrow = false,
 	): Promise<void> {
 		const subscriber = this.#ensureSubscriber();
+		// Before the ack, for the reason given in #subscribeChannel.
+		const added = register(this.#patterns, pattern, handler);
 		let count: number;
 		try {
 			count = toCount(await subscriber.psubscribe(pattern));
 		} catch (error) {
+			if (added) unregister(this.#patterns, pattern, handler);
 			options?.onError?.(error);
 			this.#client.emit("psubscription:error", { connection: this, error });
 			if (this.#logErrors) this.#report(error);
 			if (rethrow) throw error;
 			return;
 		}
-		const handlers = this.#patterns.get(pattern);
-		if (handlers) handlers.add(handler);
-		else this.#patterns.set(pattern, new Set([handler]));
 		options?.onSubscription?.(count);
 		this.#client.emit("psubscription:ready", { connection: this, count });
 	}
@@ -511,6 +514,37 @@ export class QuasarConnection {
  */
 function toCount(value: unknown): number {
 	return typeof value === "number" ? value : 0;
+}
+
+/**
+ * Add a handler under a key; true when it was not there yet. A failed
+ * subscribe rolls back only what it added itself, so retrying a handler that
+ * is already live does not unsubscribe it.
+ */
+function register<Handler>(
+	registry: Map<string, Set<Handler>>,
+	key: string,
+	handler: Handler,
+): boolean {
+	const handlers = registry.get(key);
+	if (handlers === undefined) {
+		registry.set(key, new Set([handler]));
+		return true;
+	}
+	if (handlers.has(handler)) return false;
+	handlers.add(handler);
+	return true;
+}
+
+function unregister<Handler>(
+	registry: Map<string, Set<Handler>>,
+	key: string,
+	handler: Handler,
+): void {
+	const handlers = registry.get(key);
+	if (handlers === undefined) return;
+	handlers.delete(handler);
+	if (handlers.size === 0) registry.delete(key);
 }
 
 function isPresent(client: RedisClient | undefined): client is RedisClient {
