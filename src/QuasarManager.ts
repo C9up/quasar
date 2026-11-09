@@ -16,7 +16,7 @@ import type {
 	QuasarLogger,
 	ScriptDefinition,
 } from "./QuasarConnection.js";
-import { QuasarConnection } from "./QuasarConnection.js";
+import { QuasarConnection, retire } from "./QuasarConnection.js";
 import { redactConfig } from "./redact.js";
 
 /**
@@ -183,6 +183,7 @@ export class QuasarManager<
 		connection.ioConnection.on("end", () => {
 			if (this.#connections.get(name) === connection) {
 				this.#connections.delete(name);
+				retire(connection);
 			}
 		});
 		this.#connections.set(name, connection);

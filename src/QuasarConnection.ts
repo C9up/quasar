@@ -391,6 +391,7 @@ export class QuasarConnection {
 
 	/** Close both sockets with QUIT, letting in-flight commands finish. */
 	async quit(): Promise<void> {
+		retire(this);
 		await Promise.all(
 			[this.#client, this.#subscriber].filter(isPresent).map(quitClient),
 		);
@@ -403,6 +404,7 @@ export class QuasarConnection {
 	 * caller that awaits it must keep working after switching the import.
 	 */
 	async disconnect(): Promise<void> {
+		retire(this);
 		this.#client.disconnect();
 		this.#subscriber?.disconnect();
 		this.#subscriber = undefined;
@@ -506,6 +508,24 @@ export class QuasarConnection {
 			Reflect.set(this, key, Reflect.get(client, key).bind(client));
 		}
 	}
+}
+
+/**
+ * Connections that were closed on purpose — through `quit()`/`disconnect()`,
+ * or dropped by the manager once their socket ended. A health check must not
+ * dial one again: nothing tracks it any more, so the socket it opened would
+ * outlive the next `quitAll()` and hold the process open. Module-private so
+ * it stays off the public surface; the manager and the checks reach it
+ * through the two functions below.
+ */
+const retired = new WeakSet<QuasarConnection>();
+
+export function retire(connection: QuasarConnection): void {
+	retired.add(connection);
+}
+
+export function isRetired(connection: QuasarConnection): boolean {
+	return retired.has(connection);
 }
 
 /**

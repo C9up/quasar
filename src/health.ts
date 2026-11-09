@@ -6,7 +6,7 @@
  * reads `INFO memory` and compares against the thresholds you set.
  */
 
-import type { QuasarConnection } from "./QuasarConnection.js";
+import { isRetired, type QuasarConnection } from "./QuasarConnection.js";
 
 export type HealthStatus = "ok" | "warning" | "error";
 
@@ -151,6 +151,10 @@ export class QuasarMemoryUsageCheck {
  * on one that has already recorded an error, and dial once for a closed one.
  * Adonis retries that reconnect without a bound; one attempt is enough and
  * cannot loop.
+ *
+ * NAMED DEVIATION: a connection that was quit, or that the manager dropped,
+ * is never dialled again. Upstream revives it, and since nothing tracks it
+ * any more the revived socket survives shutdown and keeps the process alive.
  */
 async function settle(
 	connection: QuasarConnection,
@@ -166,6 +170,12 @@ async function settle(
 			await delay(SETTLE_STEP_MS);
 			waited++;
 			continue;
+		}
+		if (connection.isClosed() && isRetired(connection)) {
+			return {
+				message: `"${connection.name}" was closed and is no longer in use`,
+				meta: metaOf(connection),
+			};
 		}
 		if (connection.isClosed() && !reconnected) {
 			reconnected = true;
