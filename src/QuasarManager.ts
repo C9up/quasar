@@ -159,8 +159,14 @@ export class QuasarManager<
 		const existing = this.#connections.get(name);
 		if (existing) return existing;
 
-		const config = this.#config.connections[name];
-		if (config === undefined) {
+		// Own properties only: the map is a plain object, and a name such as
+		// `constructor` or `__proto__` would otherwise read Object.prototype and
+		// open an unauthenticated connection to localhost. NAMED DEVIATION:
+		// upstream returns the inherited member instead of a connection.
+		const config = Object.hasOwn(this.#config.connections, name)
+			? this.#config.connections[name]
+			: undefined;
+		if (typeof config !== "object" || config === null) {
 			const declared = Object.keys(this.#config.connections).join(", ");
 			throw new Error(
 				`[redis] connection "${name}" is not declared — got ${declared}`,

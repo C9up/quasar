@@ -21,6 +21,38 @@ describe("QuasarManager", () => {
 		expect(manager.activeConnectionNames).toEqual([]);
 	});
 
+	/**
+	 * The connection map is a plain object, so a name inherited from
+	 * Object.prototype used to pass the "is it declared?" lookup and open an
+	 * unauthenticated connection to localhost:6379 — for any name derived at
+	 * runtime (a tenant map, a config value, an admin form).
+	 */
+	for (const inherited of [
+		"constructor",
+		"toString",
+		"__proto__",
+		"hasOwnProperty",
+		"valueOf",
+	]) {
+		it(`refuses "${inherited}", which only Object.prototype declares`, () => {
+			const manager = new QuasarManager(config);
+
+			expect(() =>
+				Reflect.apply(manager.connection, manager, [inherited]),
+			).toThrow(`"${inherited}" is not declared`);
+			expect(manager.activeConnectionsCount).toBe(0);
+		});
+	}
+
+	it("refuses a declared name whose config is not an object", () => {
+		const connections: Record<string, ConnectionConfig> = {};
+		Reflect.set(connections, "main", null);
+		const manager = new QuasarManager({ connection: "main", connections });
+
+		expect(() => manager.connection("main")).toThrow(/"main" is not declared/);
+		expect(manager.activeConnectionsCount).toBe(0);
+	});
+
 	it("hands the same connection back rather than opening a second socket", async () => {
 		const manager = new QuasarManager(config);
 		const first = manager.connection("cache");
