@@ -53,3 +53,5 @@ export type {
 export { QuasarConnection } from "./QuasarConnection.js";
 export type { QuasarManagerEvents, QuasarService } from "./QuasarManager.js";
 export { QuasarManager } from "./QuasarManager.js";
+export type { RedisCommandTracingData } from "./tracing.js";
+export * as tracingChannels from "./tracing.js";

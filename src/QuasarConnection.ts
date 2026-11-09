@@ -20,6 +20,7 @@ import {
 } from "./config.js";
 import { Emitter } from "./emitter.js";
 import { REDIS_METHODS } from "./methods.js";
+import { redisCommand } from "./tracing.js";
 
 /**
  * Where connection errors are reported. Structural on purpose: quasar is a leaf
@@ -150,6 +151,7 @@ export class QuasarConnection extends Emitter<QuasarConnectionEvents> {
 		this.#config = config;
 		this.#logger = logger;
 		this.#client = makeClient(config);
+		traceCommands(this.#client, name);
 		this.#monitor();
 		this.#forward();
 	}
@@ -515,6 +517,7 @@ export class QuasarConnection extends Emitter<QuasarConnectionEvents> {
 		if (this.#subscriber) return this.#subscriber;
 
 		const subscriber = makeClient(this.#config);
+		traceCommands(subscriber, this.name);
 		subscriber.on("message", (channel: string, message: string) => {
 			for (const handler of this.#channels.get(channel) ?? []) {
 				this.#dispatch(() => handler(message, channel));
@@ -743,4 +746,35 @@ function toPort(port: string | number): number {
 		throw new Error(`[redis] port "${String(port)}" is not a port number`);
 	}
 	return value;
+}
+
+/**
+ * Route a client's commands through {@link redisCommand}.
+ *
+ * ioredis funnels every command through `sendCommand`, so wrapping that one
+ * method covers them all. With no subscriber the original runs untouched and
+ * no context is built.
+ */
+export function traceCommands(client: RedisClient, connection: string): void {
+	const send: unknown = Reflect.get(client, "sendCommand");
+	if (typeof send !== "function") return;
+	Reflect.set(
+		client,
+		"sendCommand",
+		function tracedSendCommand(this: unknown, ...args: unknown[]): unknown {
+			if (!redisCommand.hasSubscribers) return Reflect.apply(send, this, args);
+			return redisCommand.tracePromise(
+				() => Promise.resolve(Reflect.apply(send, this, args)),
+				{ command: commandName(args[0]), connection },
+			);
+		},
+	);
+}
+
+function commandName(command: unknown): string {
+	const name =
+		typeof command === "object" && command !== null
+			? Reflect.get(command, "name")
+			: undefined;
+	return typeof name === "string" ? name : "unknown";
 }
