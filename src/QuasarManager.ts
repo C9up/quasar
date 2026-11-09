@@ -6,6 +6,7 @@
  * call sites share one socket instead of opening a pair each.
  */
 
+import { type InspectOptions, inspect } from "node:util";
 import { Redis } from "ioredis";
 import type { ConnectionConfig, QuasarConfig } from "./config.js";
 import type {
@@ -16,6 +17,7 @@ import type {
 	ScriptDefinition,
 } from "./QuasarConnection.js";
 import { QuasarConnection } from "./QuasarConnection.js";
+import { redactConfig } from "./redact.js";
 
 /**
  * What the service accessor stores: the manager seen structurally.
@@ -57,11 +59,15 @@ export interface QuasarManager<
 	Connections extends Record<string, ConnectionConfig>,
 > extends Omit<Redis, ManagerOwnMethod | "status"> {
 	/**
-	 * The config this manager was built from — Adonis' `managerConfig`. Not
-	 * `readonly`: it is declared here and assigned in the constructor, which a
-	 * readonly member of a merged interface does not allow.
+	 * The config this manager was built from — Adonis' `managerConfig`.
+	 *
+	 * NAMED DEVIATION: upstream keeps it as a public field, so serialising or
+	 * inspecting the manager prints every password in it. Here it is a
+	 * non-enumerable accessor over the private config — readable, but skipped
+	 * by `JSON.stringify` and `Object.keys` — and `toJSON` / `util.inspect`
+	 * print a redacted view instead.
 	 */
-	managerConfig: QuasarConfig<Connections>;
+	readonly managerConfig: QuasarConfig<Connections>;
 }
 
 /** What the manager defines itself, and must not have overwritten by a command. */
@@ -83,7 +89,7 @@ type ManagerOwnMethod =
  * prototype at the bottom of this file, and the interface is what tells the
  * type system they are there. `QuasarConnection` does the same, for the same
  * reason. Nothing is promised that is not installed — `managerConfig` is
- * assigned in the constructor.
+ * defined in the constructor.
  */
 // biome-ignore lint/suspicious/noUnsafeDeclarationMerging: intentional, see above
 export class QuasarManager<
@@ -98,8 +104,28 @@ export class QuasarManager<
 
 	constructor(config: QuasarConfig<Connections>, logger?: QuasarLogger) {
 		this.#config = config;
-		this.managerConfig = config;
 		this.#logger = logger;
+		Object.defineProperty(this, "managerConfig", {
+			get: () => this.#config,
+			enumerable: false,
+		});
+	}
+
+	/** What `JSON.stringify` prints: where each connection points, no credential. */
+	toJSON(): Record<string, unknown> {
+		return {
+			connection: this.#config.connection,
+			connections: redactConfig(this.#config.connections),
+			activeConnectionNames: this.activeConnectionNames,
+		};
+	}
+
+	/** What `util.inspect` and `console.log` print: the same redacted view. */
+	[Symbol.for("nodejs.util.inspect.custom")](
+		depth: number,
+		options: InspectOptions,
+	): string {
+		return `QuasarManager ${inspect(this.toJSON(), { ...options, depth })}`;
 	}
 
 	/** The name `connection()` resolves to when called without one. */
