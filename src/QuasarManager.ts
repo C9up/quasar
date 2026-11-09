@@ -306,11 +306,7 @@ export class QuasarManager<
 	 * calling `redis.quit()` expects one socket closed, not all of them.
 	 */
 	async quit(name?: keyof Connections & string): Promise<void> {
-		const target = name ?? this.defaultConnectionName;
-		const connection = this.#connections.get(target);
-		if (!connection) return;
-		await connection.quit();
-		this.#connections.delete(target);
+		await this.#close(name ?? this.defaultConnectionName, "quit");
 	}
 
 	/**
@@ -318,29 +314,36 @@ export class QuasarManager<
 	 * one when no name is given. See {@link disconnectAll} to drop every one.
 	 */
 	async disconnect(name?: keyof Connections & string): Promise<void> {
-		const target = name ?? this.defaultConnectionName;
-		const connection = this.#connections.get(target);
-		if (!connection) return;
-		await connection.disconnect();
-		this.#connections.delete(target);
+		await this.#close(name ?? this.defaultConnectionName, "disconnect");
 	}
 
 	/** QUIT every open connection. What a provider wants on shutdown. */
 	async quitAll(): Promise<void> {
 		await Promise.all(
-			this.activeConnectionNames.map((name) =>
-				this.quit(name as keyof Connections & string),
-			),
+			this.activeConnectionNames.map((name) => this.#close(name, "quit")),
 		);
 	}
 
 	/** Drop every open connection without waiting. */
 	async disconnectAll(): Promise<void> {
 		await Promise.all(
-			this.activeConnectionNames.map((name) =>
-				this.disconnect(name as keyof Connections & string),
-			),
+			this.activeConnectionNames.map((name) => this.#close(name, "disconnect")),
 		);
+	}
+
+	/**
+	 * Close one tracked connection and stop tracking it. Takes a plain string:
+	 * the names it is handed come from the map itself, and narrowing them back
+	 * to the declared keys would take an assertion.
+	 */
+	async #close(name: string, how: "quit" | "disconnect"): Promise<void> {
+		const connection = this.#connections.get(name);
+		if (!connection) return;
+		await connection[how]();
+		// Unless a newer connection took the name while this one was closing.
+		if (this.#connections.get(name) === connection) {
+			this.#connections.delete(name);
+		}
 	}
 }
 

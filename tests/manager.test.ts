@@ -63,6 +63,18 @@ describe("QuasarManager", () => {
 		await manager.disconnectAll();
 	});
 
+	it("closes and forgets every connection on disconnectAll()", async () => {
+		const manager = new QuasarManager(config);
+		const main = manager.connection("main");
+		const cache = manager.connection("cache");
+
+		await manager.disconnectAll();
+
+		expect(manager.activeConnectionNames).toEqual([]);
+		expect(main.status).toBe("end");
+		expect(cache.status).toBe("end");
+	});
+
 	it("resolves the declared default with no argument", async () => {
 		const manager = new QuasarManager(config);
 		expect(manager.defaultConnectionName).toBe("main");
