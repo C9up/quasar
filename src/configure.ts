@@ -23,6 +23,11 @@ interface Codemods {
 		state?: Record<string, string | number | boolean>,
 		options?: { force?: boolean },
 	): Promise<{ path: string; contents: string }>;
+	/** Absent from a ream older than the hook; the rules are then added by hand. */
+	defineEnvValidations?(definition: {
+		leadingComment?: string;
+		variables: Record<string, string>;
+	}): Promise<string[]>;
 }
 
 export async function configure(codemods: Codemods): Promise<void> {
@@ -33,6 +38,19 @@ export async function configure(codemods: Codemods): Promise<void> {
 		REDIS_HOST: "127.0.0.1",
 		REDIS_PORT: "6379",
 		REDIS_PASSWORD: "",
+	});
+
+	// Upstream's rules. The port arrives as a number, and the password as a
+	// Secret, which keeps it out of logs until the client is built. Without
+	// them the config still works: a string port is converted, and a plain
+	// password is accepted.
+	await codemods.defineEnvValidations?.({
+		leadingComment: "Variables for the Redis connection (@c9up/quasar)",
+		variables: {
+			REDIS_HOST: "Env.schema.string({ format: 'host' })",
+			REDIS_PORT: "Env.schema.number()",
+			REDIS_PASSWORD: "Env.schema.secret.optional()",
+		},
 	});
 
 	await codemods.addProvider("@c9up/quasar/provider");

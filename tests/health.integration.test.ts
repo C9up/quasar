@@ -13,6 +13,7 @@ import { QuasarCheck, QuasarMemoryUsageCheck } from "../src/health.js";
 import { QuasarConnection } from "../src/QuasarConnection.js";
 import { QuasarManager } from "../src/QuasarManager.js";
 import { redisTestUrl } from "./_support/redisTestUrl.js";
+import { stubRetryStrategy } from "./_support/stubRetryStrategy.js";
 
 const url = redisTestUrl();
 const admin = new Redis(url, { lazyConnect: true });
@@ -92,4 +93,27 @@ describe("quasar > a health check after the connection was given up", () => {
 		await vi.waitFor(() => expect(connection.status).toBe("end"));
 		expect(await clientsNamed(name)).toBe(0);
 	});
+});
+
+/**
+ * The configure stub's retry strategy, against a port nothing listens on: a
+ * command must fail in seconds. With ioredis' defaults it waited ~74 s, and
+ * every request holding one hung that long while the offline queue grew.
+ */
+describe("quasar > a command during an outage, with the generated config", () => {
+	it("rejects within seconds", async () => {
+		const connection = new QuasarConnection("main", {
+			host: "127.0.0.1",
+			port: 6399,
+			db: 0,
+			keyPrefix: "",
+			retryStrategy: stubRetryStrategy(),
+		}).doNotLogErrors();
+		const started = Date.now();
+
+		await expect(connection.get("k")).rejects.toThrow();
+
+		expect(Date.now() - started).toBeLessThan(5_000);
+		expect(connection.status).toBe("end");
+	}, 10_000);
 });

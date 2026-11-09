@@ -10,9 +10,17 @@ export default defineConfig({
 
   connections: {
     main: {
-      host: env.get('REDIS_HOST', '127.0.0.1'),
-      port: Number(env.get('REDIS_PORT', '6379')),
-      password: env.get('REDIS_PASSWORD', ''),
+      host: env.get('REDIS_HOST'),
+      port: env.get('REDIS_PORT'),
+      password: env.get('REDIS_PASSWORD'),
+      db: 0,
+      keyPrefix: '',
+      // Give up after ten attempts instead of retrying forever: a command
+      // issued during an outage then fails in about three seconds, and the
+      // next call opens a fresh connection.
+      retryStrategy(times) {
+        return times > 10 ? null : times * 50
+      },
     },
   },
 })

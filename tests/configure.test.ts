@@ -8,6 +8,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { configure } from "../src/configure.js";
+import { stubRetryStrategy } from "./_support/stubRetryStrategy.js";
 
 /**
  * Read a stub the way `codemods.makeUsingStub` does.
@@ -30,15 +31,29 @@ function renderStub(
 	return { to: render(declared), body: render(body) };
 }
 
-function fakeCodemods() {
+function fakeCodemods(canValidateEnv = true) {
 	const providers: string[] = [];
 	const files: Array<{ path: string; content: string }> = [];
 	const env: Record<string, string> = {};
+	const validations: Array<{
+		leadingComment?: string;
+		variables: Record<string, string>;
+	}> = [];
 	return {
 		providers,
 		files,
 		env,
+		validations,
 		codemods: {
+			...(canValidateEnv && {
+				async defineEnvValidations(definition: {
+					leadingComment?: string;
+					variables: Record<string, string>;
+				}) {
+					validations.push(definition);
+					return Object.keys(definition.variables);
+				},
+			}),
 			async addProvider(importPath: string) {
 				providers.push(importPath);
 			},
@@ -92,5 +107,57 @@ describe("quasar > configure", () => {
 		// A stub importing the wrong package typechecks nowhere and is the one
 		// mistake a generated file must not make.
 		expect(files[0]?.content).toContain("from '@c9up/quasar'");
+	});
+
+	/**
+	 * Upstream's stub bounds the reconnect: ten attempts, 50 ms apart and
+	 * growing, then ioredis gives up and the manager reopens on the next call.
+	 * Without it every command queued during an outage waited ~74 s.
+	 */
+	it("writes upstream's bounded retry strategy", async () => {
+		const { files, codemods } = fakeCodemods();
+
+		await configure(codemods);
+		const retryStrategy = stubRetryStrategy();
+
+		expect(files[0]?.content).toContain("db: 0");
+		expect(files[0]?.content).toContain("keyPrefix: ''");
+		expect(retryStrategy(1)).toBe(50);
+		expect(retryStrategy(10)).toBe(500);
+		expect(retryStrategy(11)).toBeNull();
+	});
+
+	it("reads the port and the password through the env schema", async () => {
+		const { files, codemods } = fakeCodemods();
+
+		await configure(codemods);
+
+		// No `Number(...)`, which turned a typo into NaN and let ioredis fall
+		// back to 6379; no `''` default for a password that is a Secret.
+		expect(files[0]?.content).toContain("port: env.get('REDIS_PORT')");
+		expect(files[0]?.content).toContain("password: env.get('REDIS_PASSWORD')");
+	});
+
+	it("declares upstream's validations, the password as a secret", async () => {
+		const { validations, codemods } = fakeCodemods();
+
+		await configure(codemods);
+
+		expect(validations).toHaveLength(1);
+		expect(validations[0]?.variables).toEqual({
+			REDIS_HOST: "Env.schema.string({ format: 'host' })",
+			REDIS_PORT: "Env.schema.number()",
+			REDIS_PASSWORD: "Env.schema.secret.optional()",
+		});
+	});
+
+	it("still configures against a ream that cannot write validations", async () => {
+		const { providers, files, codemods } = fakeCodemods(false);
+
+		expect("defineEnvValidations" in codemods).toBe(false);
+		await configure(codemods);
+
+		expect(providers).toEqual(["@c9up/quasar/provider"]);
+		expect(files.map((f) => f.path)).toEqual(["config/redis.ts"]);
 	});
 });
