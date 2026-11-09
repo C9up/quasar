@@ -392,10 +392,9 @@ export class QuasarConnection {
 	/** Close both sockets with QUIT, letting in-flight commands finish. */
 	async quit(): Promise<void> {
 		retire(this);
-		await Promise.all(
-			[this.#client, this.#subscriber].filter(isPresent).map(quitClient),
-		);
-		this.#subscriber = undefined;
+		const sockets = [this.#client, this.#subscriber].filter(isPresent);
+		this.#dropSubscriptions();
+		await Promise.all(sockets.map(quitClient));
 	}
 
 	/**
@@ -407,7 +406,22 @@ export class QuasarConnection {
 		retire(this);
 		this.#client.disconnect();
 		this.#subscriber?.disconnect();
+		this.#dropSubscriptions();
+	}
+
+	/**
+	 * Forget the subscriber socket and every handler that lived on it.
+	 *
+	 * Done here and not only in the socket's `end` listener: that listener
+	 * ignores a socket that is no longer the current one — which, once this
+	 * method has run, it is not — so the handlers outlived the close and a
+	 * later subscribe on a fresh socket revived them. Upstream clears them on
+	 * `end` unconditionally.
+	 */
+	#dropSubscriptions(): void {
 		this.#subscriber = undefined;
+		this.#channels.clear();
+		this.#patterns.clear();
 	}
 
 	/**
@@ -485,10 +499,10 @@ export class QuasarConnection {
 		// only existed on it, is what makes the next subscribe open a live
 		// socket. Adonis does the same, for the same reason.
 		subscriber.on("end", () => {
+			// A late `end` from a socket already replaced must not wipe the
+			// handlers its successor holds.
 			if (this.#subscriber !== subscriber) return;
-			this.#subscriber = undefined;
-			this.#channels.clear();
-			this.#patterns.clear();
+			this.#dropSubscriptions();
 		});
 
 		this.#subscriber = subscriber;

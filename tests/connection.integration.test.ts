@@ -169,4 +169,47 @@ describe.skipIf(!live)("QuasarConnection against a live server", () => {
 			.poll(() => connection.ioConnection.status, { timeout: 5_000 })
 			.toBe("end");
 	});
+
+	/**
+	 * Closing a connection drops its subscriptions. The handlers used to
+	 * survive in the registry, so a later subscribe on the same connection
+	 * revived them next to the new one: a listener torn down with a tenant or
+	 * a client went on receiving its successor's messages.
+	 */
+	for (const close of ["quit", "disconnect"] as const) {
+		it(`forgets every handler on ${close}(), so a later subscribe starts clean`, async () => {
+			const connection = new QuasarConnection(close, { url, db: 15 });
+			connections.push(connection);
+			const publisher = open();
+			const channel = `redis-test:${process.pid}:${close}-stale`;
+			const prefix = `redis-test:${process.pid}:${close}-pstale`;
+			const calls: string[] = [];
+
+			await connection.subscribed(channel, (message) => {
+				calls.push(`old:${message}`);
+			});
+			await connection.psubscribed(`${prefix}:*`, (matched, message) => {
+				calls.push(`old-pattern:${matched}=${message}`);
+			});
+			await connection[close]();
+
+			await connection.subscribed(channel, (message) => {
+				calls.push(`new:${message}`);
+			});
+			await connection.psubscribed(`${prefix}:*`, (matched, message) => {
+				calls.push(`new-pattern:${matched}=${message}`);
+			});
+			await publisher.publish(channel, "o1");
+			await publisher.publish(`${prefix}:1`, "p1");
+
+			await expect
+				.poll(() => [...calls].sort(), { timeout: 3_000 })
+				.toEqual([`new-pattern:${prefix}:1=p1`, "new:o1"]);
+			await new Promise((resolve) => setTimeout(resolve, 200));
+			expect([...calls].sort()).toEqual([
+				`new-pattern:${prefix}:1=p1`,
+				"new:o1",
+			]);
+		});
+	}
 });
