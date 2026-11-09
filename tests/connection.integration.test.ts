@@ -7,6 +7,7 @@
  * 127.0.0.1:6379): a contributor without Redis still gets a green suite.
  */
 
+import { Secret } from "@c9up/ream";
 import { Redis } from "ioredis";
 import { afterAll, describe, expect, it } from "vitest";
 import { QuasarConnection } from "../src/QuasarConnection.js";
@@ -212,4 +213,40 @@ describe.skipIf(!live)("QuasarConnection against a live server", () => {
 			]);
 		});
 	}
+});
+
+/**
+ * Against a server that requires a password: a Secret must authenticate both
+ * sockets, not send AUTH '[redacted]'.
+ */
+describe.skipIf(!live)("QuasarConnection with a Secret password", () => {
+	const user = `quasar-secret-${process.pid}`;
+	const admin = new Redis(url, { lazyConnect: true });
+
+	afterAll(async () => {
+		await admin.acl("DELUSER", user);
+		admin.disconnect();
+	});
+
+	it("authenticates the command and the subscriber socket", async () => {
+		await admin.acl("SETUSER", user, "on", ">s3cret", "~*", "&*", "+@all");
+		const connection = new QuasarConnection("secret", {
+			url,
+			username: user,
+			password: new Secret("s3cret"),
+		});
+		connections.push(connection);
+		const channel = `redis-test:${process.pid}:secret`;
+		const received: string[] = [];
+
+		expect(await connection.ping()).toBe("PONG");
+		await connection.subscribed(channel, (message) => {
+			received.push(message);
+		});
+		await connection.publish(channel, "authenticated");
+
+		await expect
+			.poll(() => received, { timeout: 3_000 })
+			.toEqual(["authenticated"]);
+	});
 });

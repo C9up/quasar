@@ -15,16 +15,53 @@ import type {
 	RedisOptions,
 } from "ioredis";
 
-/** A single server, addressed by options or by URL. */
-export interface StandaloneConnectionConfig extends RedisOptions {
+/**
+ * A value handed over only through `release()` — ream's `Secret`, read
+ * structurally so this package does not import the framework. What
+ * `env.get()` returns for a variable declared `Env.schema.secret()`.
+ */
+export interface SecretValue {
+	release(): string;
+}
+
+/** A credential as the config may carry it: plain, or still wrapped. */
+export type Credential = string | SecretValue;
+
+/**
+ * A single server, addressed by options or by URL.
+ *
+ * As upstream types it: the port may be the string an env file holds, and the
+ * passwords may stay wrapped. They are unwrapped on a copy as the client is
+ * built, so the config — and anything that prints it — keeps the Secret.
+ */
+export interface StandaloneConnectionConfig
+	extends Omit<RedisOptions, "port" | "password" | "sentinelPassword"> {
 	/** `redis://` / `rediss://` URL. Takes precedence over host/port when set. */
 	url?: string;
+	port?: string | number;
+	password?: Credential;
+	sentinelPassword?: Credential;
+}
+
+type ClusterRedisOptions = NonNullable<ClusterOptions["redisOptions"]>;
+
+/**
+ * ioredis' cluster options, with the per-node passwords accepting a Secret
+ * like a standalone connection's do. Upstream leaves these plain; a cluster
+ * configured from the same env file deserves the same treatment.
+ */
+export interface QuasarClusterOptions
+	extends Omit<ClusterOptions, "redisOptions"> {
+	redisOptions?: Omit<ClusterRedisOptions, "password" | "sentinelPassword"> & {
+		password?: Credential;
+		sentinelPassword?: Credential;
+	};
 }
 
 /** A cluster, addressed by its seed nodes. */
 export interface ClusterConnectionConfig {
 	clusters: ClusterNode[];
-	clusterOptions?: ClusterOptions;
+	clusterOptions?: QuasarClusterOptions;
 }
 
 export type ConnectionConfig =

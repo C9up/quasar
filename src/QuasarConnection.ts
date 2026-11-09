@@ -11,9 +11,10 @@
  * between the two costs nothing.
  */
 
-import { Cluster, Redis } from "ioredis";
+import { Cluster, Redis, type RedisOptions } from "ioredis";
 import {
 	type ConnectionConfig,
+	type Credential,
 	isClusterConfig,
 	type RedisClient,
 } from "./config.js";
@@ -607,12 +608,73 @@ async function quitClient(client: RedisClient): Promise<void> {
 	await client.quit();
 }
 
+/**
+ * Build an ioredis client from a config, on a copy: the port read from an env
+ * file becomes a number and Secret passwords are released here, at the last
+ * moment, so the config itself keeps them wrapped. Upstream does the same
+ * normalisation, but in place.
+ */
 function makeClient(config: ConnectionConfig): RedisClient {
 	if (isClusterConfig(config)) {
-		return new Cluster(config.clusters, config.clusterOptions);
+		const { redisOptions, ...clusterOptions } = config.clusterOptions ?? {};
+		if (redisOptions === undefined) {
+			return new Cluster(config.clusters, clusterOptions);
+		}
+		const { password, sentinelPassword, ...nodeOptions } = redisOptions;
+		return new Cluster(config.clusters, {
+			...clusterOptions,
+			redisOptions: {
+				...nodeOptions,
+				...credentials(password, sentinelPassword),
+			},
+		});
 	}
-	const { url, ...options } = config;
+	const { url, port, password, sentinelPassword, ...rest } = config;
+	const options: RedisOptions = {
+		...rest,
+		...(port === undefined ? {} : { port: toPort(port) }),
+		...credentials(password, sentinelPassword),
+	};
 	return url === undefined ? new Redis(options) : new Redis(url, options);
+}
+
+/** The released passwords, each present only when it was configured. */
+function credentials(
+	password: Credential | undefined,
+	sentinelPassword: Credential | undefined,
+): { password?: string; sentinelPassword?: string } {
+	return {
+		...(password === undefined ? {} : { password: release(password) }),
+		...(sentinelPassword === undefined
+			? {}
+			: { sentinelPassword: release(sentinelPassword) }),
+	};
+}
+
+function release(credential: Credential): string {
+	return typeof credential === "string" ? credential : credential.release();
+}
+
+/**
+ * A port, from a number or the string an env file holds.
+ *
+ * NAMED DEVIATION: upstream runs `Number(port)` and stops there, and ioredis
+ * quietly dials its default port when handed NaN — a typo in REDIS_PORT then
+ * reaches whatever listens on 6379. Anything that is not a whole port number
+ * is refused instead.
+ */
+function toPort(port: string | number): number {
+	const value =
+		typeof port === "string" && port.trim() !== "" ? Number(port) : port;
+	if (
+		typeof value !== "number" ||
+		!Number.isInteger(value) ||
+		value < 0 ||
+		value > 65_535
+	) {
+		throw new Error(`[redis] port "${String(port)}" is not a port number`);
+	}
+	return value;
 }
 
 /** Every callable ioredis owns, walking up its prototype chain. */

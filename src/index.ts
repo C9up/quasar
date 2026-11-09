@@ -23,8 +23,11 @@ import "./augmentations.js";
 export type {
 	ClusterConnectionConfig,
 	ConnectionConfig,
+	Credential,
+	QuasarClusterOptions,
 	QuasarConfig,
 	RedisClient,
+	SecretValue,
 	StandaloneConnectionConfig,
 } from "./config.js";
 export { defineConfig, isClusterConfig } from "./config.js";
