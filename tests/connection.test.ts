@@ -281,9 +281,7 @@ describe("quasar > pub/sub without a server answering", () => {
 		vi.spyOn(subscriber, "subscribe").mockRejectedValue(failure);
 		const onError = vi.fn();
 		const emitted: Array<{ error: unknown }> = [];
-		c.ioConnection.on("subscription:error", (e: { error: unknown }) =>
-			emitted.push(e),
-		);
+		c.on("subscription:error", (e) => emitted.push(e));
 
 		// A subscribe that throws inside a boot sequence takes the app down.
 		// It answers `void`, as upstream does — there is nothing to await and
@@ -318,9 +316,7 @@ describe("quasar > pub/sub without a server answering", () => {
 		vi.spyOn(subscriber, "psubscribe").mockRejectedValue(failure);
 		const onError = vi.fn();
 		const emitted: Array<{ error: unknown }> = [];
-		c.ioConnection.on("psubscription:error", (e: { error: unknown }) =>
-			emitted.push(e),
-		);
+		c.on("psubscription:error", (e) => emitted.push(e));
 
 		expect(c.psubscribe("user:*", () => {}, { onError })).toBeUndefined();
 		await vi.waitFor(() => expect(onError).toHaveBeenCalledWith(failure));
@@ -354,9 +350,7 @@ describe("quasar > pub/sub without a server answering", () => {
 		await withSubscriber(c);
 		const onSubscription = vi.fn();
 		const ready: Array<{ count: number }> = [];
-		c.ioConnection.on("subscription:ready", (e: { count: number }) =>
-			ready.push(e),
-		);
+		c.on("subscription:ready", (e) => ready.push(e));
 
 		await c.subscribed("orders", () => {}, { onSubscription });
 

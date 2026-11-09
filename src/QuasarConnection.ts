@@ -6,9 +6,9 @@
  * listens needs two sockets. That second one is opened lazily, on the first
  * subscribe, and never at all for a connection that only runs commands.
  *
- * The ioredis client is reachable as `.client`; every ioredis command is also
- * callable straight on the connection (`connection.get('key')`), so switching
- * between the two costs nothing.
+ * The ioredis client is reachable as `.ioConnection`; the Redis commands are
+ * also callable straight on the connection (`connection.get('key')`), so
+ * switching between the two costs nothing.
  */
 
 import { Cluster, Redis, type RedisOptions } from "ioredis";
@@ -18,6 +18,8 @@ import {
 	isClusterConfig,
 	type RedisClient,
 } from "./config.js";
+import { Emitter } from "./emitter.js";
+import { REDIS_METHODS } from "./methods.js";
 
 /**
  * Where connection errors are reported. Structural on purpose: quasar is a leaf
@@ -51,18 +53,41 @@ export interface PubSubOptions {
 }
 
 /**
- * The subscriber socket's lifecycle, re-emitted as `subscriber:<name>` — the
- * names Adonis uses. `message`/`pmessage` are NOT here: those are delivered to
- * the registered handlers, not to listeners.
+ * What a connection emits, with upstream's payloads: always the connection,
+ * plus what the event is about. The `subscriber:` events are the pub/sub
+ * socket's lifecycle — that socket is internal and opened lazily, so nothing
+ * outside could listen to it otherwise. `message`/`pmessage` are not here:
+ * those are delivered to the registered handlers.
  */
-const SUBSCRIBER_EVENTS = [
-	"connect",
-	"ready",
-	"error",
-	"close",
-	"reconnecting",
-	"end",
-] as const;
+export interface QuasarConnectionEvents {
+	connect: { connection: QuasarConnection };
+	wait: { connection: QuasarConnection };
+	ready: { connection: QuasarConnection };
+	error: { error: unknown; connection: QuasarConnection };
+	close: { connection: QuasarConnection };
+	reconnecting: { connection: QuasarConnection; waitTime: number };
+	end: { connection: QuasarConnection };
+	"subscriber:connect": { connection: QuasarConnection };
+	"subscriber:ready": { connection: QuasarConnection };
+	"subscriber:error": { error: unknown; connection: QuasarConnection };
+	"subscriber:close": { connection: QuasarConnection };
+	"subscriber:reconnecting": {
+		connection: QuasarConnection;
+		waitTime: number;
+	};
+	"subscriber:end": { connection: QuasarConnection };
+	"node:added": { connection: QuasarConnection; node: Redis };
+	"node:removed": { connection: QuasarConnection; node: Redis };
+	"node:error": {
+		error: unknown;
+		address: string;
+		connection: QuasarConnection;
+	};
+	"subscription:ready": { connection: QuasarConnection; count: number };
+	"subscription:error": { connection: QuasarConnection; error: unknown };
+	"psubscription:ready": { connection: QuasarConnection; count: number };
+	"psubscription:error": { connection: QuasarConnection; error: unknown };
+}
 
 /** A LUA script registered as a command through `defineCommand`. */
 export interface ScriptDefinition {
@@ -94,26 +119,17 @@ export type PatternHandler = (
 	pattern: string,
 ) => void | Promise<void>;
 
-// Merging the ioredis surface in is what makes `connection.get(...)` type-check
-// without re-declaring 200 command signatures. The methods exist at runtime —
-// #forward routes them to the client — so the merge describes what is really
-// there. Same generated-method pattern as ream's ApiResponse.
-export interface QuasarConnection
-	extends Omit<
-		Redis,
-		| "subscribe"
-		| "unsubscribe"
-		| "psubscribe"
-		| "punsubscribe"
-		| "publish"
-		| "quit"
-		| "disconnect"
-		// Ours widens ioredis': a Cluster also reports "disconnecting", and this
-		// class fronts both. Adonis types it the same widened way.
-		| "status"
-	> {}
+/** The commands forwarded onto a connection that ioredis' types know. */
+type ConnectionCommand = Extract<(typeof REDIS_METHODS)[number], keyof Redis>;
 
-export class QuasarConnection {
+// Merging the ioredis commands in is what makes `connection.get(...)`
+// type-check without re-declaring 300 command signatures. The methods exist at
+// runtime — #forward binds them from the client — so the merge describes what
+// is really there. Same generated-method pattern as ream's ApiResponse.
+export interface QuasarConnection extends Pick<Redis, ConnectionCommand> {}
+
+// biome-ignore lint/suspicious/noUnsafeDeclarationMerging: the interface above describes the commands #forward installs
+export class QuasarConnection extends Emitter<QuasarConnectionEvents> {
 	readonly name: string;
 	readonly #config: ConnectionConfig;
 	readonly #client: RedisClient;
@@ -129,20 +145,58 @@ export class QuasarConnection {
 	#logger: QuasarLogger | undefined;
 
 	constructor(name: string, config: ConnectionConfig, logger?: QuasarLogger) {
+		super();
 		this.name = name;
 		this.#config = config;
 		this.#logger = logger;
 		this.#client = makeClient(config);
+		this.#monitor();
+		this.#forward();
+	}
+
+	/**
+	 * Re-emit the client's lifecycle with upstream's payloads.
+	 *
+	 * Quasar's own bookkeeping listens on the ioredis client directly, and
+	 * applications listen here: nothing reachable from this class can detach
+	 * the error recorder, whose absence would let one `error` event crash the
+	 * process.
+	 */
+	#monitor(): void {
+		const client = this.#client;
 		// Remembered rather than thrown: ioredis reconnects on its own, and a
 		// connection that recovered should not keep reporting the old failure.
-		this.#client.on("error", (error: unknown) => {
+		client.on("error", (error: unknown) => {
 			this.#lastError = error;
 			if (this.#logErrors) this.#report(error);
+			this.notify("error", { error, connection: this });
 		});
-		this.#client.on("ready", () => {
+		client.on("ready", () => {
 			this.#lastError = undefined;
+			this.notify("ready", { connection: this });
 		});
-		this.#forward();
+		client.on("connect", () => this.notify("connect", { connection: this }));
+		client.on("wait", () => this.notify("wait", { connection: this }));
+		client.on("close", () => this.notify("close", { connection: this }));
+		client.on("end", () => this.notify("end", { connection: this }));
+		client.on("reconnecting", (waitTime: number) =>
+			this.notify("reconnecting", { connection: this, waitTime }),
+		);
+		// Cluster only.
+		client.on("+node", (node: Redis) =>
+			this.notify("node:added", { connection: this, node }),
+		);
+		client.on("-node", (node: Redis) =>
+			this.notify("node:removed", { connection: this, node }),
+		);
+		client.on("node error", (error: unknown, address: string) =>
+			this.notify("node:error", { error, address, connection: this }),
+		);
+	}
+
+	/** A listener of this connection's events failed: report it like an error. */
+	protected override listenerFailed(error: unknown): void {
+		this.#report(error);
 	}
 
 	/**
@@ -307,13 +361,13 @@ export class QuasarConnection {
 		} catch (error) {
 			if (added) unregister(this.#channels, channel, handler);
 			options?.onError?.(error);
-			this.#client.emit("subscription:error", { connection: this, error });
+			this.notify("subscription:error", { connection: this, error });
 			if (this.#logErrors) this.#report(error);
 			if (rethrow) throw error;
 			return;
 		}
 		options?.onSubscription?.(count);
-		this.#client.emit("subscription:ready", { connection: this, count });
+		this.notify("subscription:ready", { connection: this, count });
 	}
 
 	/**
@@ -353,13 +407,13 @@ export class QuasarConnection {
 		} catch (error) {
 			if (added) unregister(this.#patterns, pattern, handler);
 			options?.onError?.(error);
-			this.#client.emit("psubscription:error", { connection: this, error });
+			this.notify("psubscription:error", { connection: this, error });
 			if (this.#logErrors) this.#report(error);
 			if (rethrow) throw error;
 			return;
 		}
 		options?.onSubscription?.(count);
-		this.#client.emit("psubscription:ready", { connection: this, count });
+		this.notify("psubscription:ready", { connection: this, count });
 	}
 
 	/**
@@ -474,26 +528,32 @@ export class QuasarConnection {
 				}
 			},
 		);
-		// Re-emit the subscriber socket's lifecycle under Adonis' `subscriber:`
-		// names. Without this a pub/sub connection that drops is invisible: the
-		// socket is created lazily and internally, so an app cannot attach a
-		// listener to it before the first subscribe, and `error` on a socket
-		// with no listener crashes the process.
-		//
-		// They go out on the COMMAND client's emitter because that is what
-		// `connection.on(...)` forwards to — one listener surface, not two.
-		for (const event of SUBSCRIBER_EVENTS) {
-			subscriber.on(event, (...args: unknown[]) => {
-				if (event === "error") this.#lastSubscriberError = args[0];
-				this.#client.emit(`subscriber:${event}`, ...args);
-			});
-		}
-		// Report it too, the way a command-socket error is reported. The loop
-		// above already keeps the process alive — attaching any listener to
-		// `error` is what stops an EventEmitter from throwing — so this one is
-		// purely about the failure reaching the logger.
+		// Re-emit the subscriber socket's lifecycle under Adonis' names, with
+		// its payloads. Without this a pub/sub connection that drops is
+		// invisible: the socket is created lazily and internally, so an app
+		// cannot attach a listener to it before the first subscribe.
+		subscriber.on("connect", () =>
+			this.notify("subscriber:connect", { connection: this }),
+		);
+		subscriber.on("ready", () =>
+			this.notify("subscriber:ready", { connection: this }),
+		);
+		subscriber.on("close", () =>
+			this.notify("subscriber:close", { connection: this }),
+		);
+		subscriber.on("end", () =>
+			this.notify("subscriber:end", { connection: this }),
+		);
+		subscriber.on("reconnecting", (waitTime: number) =>
+			this.notify("subscriber:reconnecting", { connection: this, waitTime }),
+		);
+		// Recorded and reported like a command-socket error. Attaching it is
+		// also what stops ioredis' emitter from throwing on an `error` with no
+		// listener.
 		subscriber.on("error", (error: unknown) => {
+			this.#lastSubscriberError = error;
 			if (this.#logErrors) this.#report(error);
+			this.notify("subscriber:error", { error, connection: this });
 		});
 		// `end` is ioredis giving up for good, not one failed attempt. The
 		// socket is cached, so keeping it means the next subscribe reuses an
@@ -514,16 +574,21 @@ export class QuasarConnection {
 	}
 
 	/**
-	 * Bind every ioredis command onto this instance, once, in the constructor.
+	 * Bind the Redis commands onto this instance, once, in the constructor.
 	 * Binding beats a Proxy here: `connection.get` stays a plain function, so it
 	 * can be destructured, passed around, or stubbed like any other method.
+	 *
+	 * An explicit list, upstream's: see `methods.ts` for what walking the
+	 * prototype chain used to let through. A command the client does not have
+	 * (a cluster has no `monitor`) is simply not installed.
 	 */
 	#forward(): void {
 		const client = this.#client;
-		const own = new Set(Object.getOwnPropertyNames(QuasarConnection.prototype));
-		for (const key of commandNames(client)) {
-			if (own.has(key) || key.startsWith("_") || key in this) continue;
-			Reflect.set(this, key, Reflect.get(client, key).bind(client));
+		for (const key of REDIS_METHODS) {
+			if (key in this) continue;
+			const command: unknown = Reflect.get(client, key);
+			if (typeof command !== "function") continue;
+			Reflect.set(this, key, command.bind(client));
 		}
 	}
 }
@@ -678,20 +743,4 @@ function toPort(port: string | number): number {
 		throw new Error(`[redis] port "${String(port)}" is not a port number`);
 	}
 	return value;
-}
-
-/** Every callable ioredis owns, walking up its prototype chain. */
-function commandNames(client: RedisClient): string[] {
-	const names = new Set<string>();
-	for (
-		let target: object | null = client;
-		target !== null && target !== Object.prototype;
-		target = Object.getPrototypeOf(target)
-	) {
-		for (const key of Object.getOwnPropertyNames(target)) {
-			if (typeof Reflect.get(target, key, client) === "function")
-				names.add(key);
-		}
-	}
-	return [...names];
 }

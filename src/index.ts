@@ -46,9 +46,10 @@ export type {
 	ChannelHandler,
 	PatternHandler,
 	PubSubOptions,
+	QuasarConnectionEvents,
 	QuasarLogger,
 	ScriptDefinition,
 } from "./QuasarConnection.js";
 export { QuasarConnection } from "./QuasarConnection.js";
-export type { QuasarService } from "./QuasarManager.js";
+export type { QuasarManagerEvents, QuasarService } from "./QuasarManager.js";
 export { QuasarManager } from "./QuasarManager.js";

@@ -7,8 +7,10 @@
  */
 
 import { type InspectOptions, inspect } from "node:util";
-import { Redis } from "ioredis";
+import type { Redis } from "ioredis";
 import type { ConnectionConfig, QuasarConfig } from "./config.js";
+import { Emitter } from "./emitter.js";
+import { BASE_METHODS } from "./methods.js";
 import type {
 	ChannelHandler,
 	PatternHandler,
@@ -47,6 +49,15 @@ export interface QuasarService {
 	disconnect(name?: string): Promise<void>;
 	quitAll(): Promise<void>;
 	disconnectAll(): Promise<void>;
+	on(
+		event: "connection",
+		listener: (connection: QuasarConnection) => unknown,
+	): () => void;
+	off(
+		event: "connection",
+		listener: (connection: QuasarConnection) => unknown,
+	): void;
+	once(event: "connection"): Promise<QuasarConnection>;
 }
 
 /**
@@ -57,7 +68,7 @@ export interface QuasarService {
  */
 export interface QuasarManager<
 	Connections extends Record<string, ConnectionConfig>,
-> extends Omit<Redis, ManagerOwnMethod | "status"> {
+> extends Pick<Redis, ManagerCommand> {
 	/**
 	 * The config this manager was built from — Adonis' `managerConfig`.
 	 *
@@ -70,19 +81,13 @@ export interface QuasarManager<
 	readonly managerConfig: QuasarConfig<Connections>;
 }
 
-/** What the manager defines itself, and must not have overwritten by a command. */
-type ManagerOwnMethod =
-	| "connection"
-	| "useLogger"
-	| "subscribe"
-	| "unsubscribe"
-	| "psubscribe"
-	| "punsubscribe"
-	| "publish"
-	| "quit"
-	| "disconnect"
-	| "defineCommand"
-	| "runCommand";
+/** The commands forwarded to the default connection that ioredis' types know. */
+type ManagerCommand = Extract<(typeof BASE_METHODS)[number], keyof Redis>;
+
+/** What the manager emits: each connection it opens, as upstream does. */
+export interface QuasarManagerEvents {
+	connection: QuasarConnection;
+}
 
 /*
  * The merge below IS the mechanism: the ioredis commands are installed on the
@@ -94,7 +99,7 @@ type ManagerOwnMethod =
 // biome-ignore lint/suspicious/noUnsafeDeclarationMerging: intentional, see above
 export class QuasarManager<
 	Connections extends Record<string, ConnectionConfig>,
-> {
+> extends Emitter<QuasarManagerEvents> {
 	readonly #config: QuasarConfig<Connections>;
 	readonly #connections = new Map<string, QuasarConnection>();
 	/** Scripts to replay onto every connection opened from here on. */
@@ -103,6 +108,7 @@ export class QuasarManager<
 	#logger: QuasarLogger | undefined;
 
 	constructor(config: QuasarConfig<Connections>, logger?: QuasarLogger) {
+		super();
 		this.#config = config;
 		this.#logger = logger;
 		Object.defineProperty(this, "managerConfig", {
@@ -193,7 +199,16 @@ export class QuasarManager<
 			}
 		});
 		this.#connections.set(name, connection);
+		this.notify("connection", connection);
 		return connection;
+	}
+
+	/** A `connection` listener failed: report it where connection failures go. */
+	protected override listenerFailed(error: unknown): void {
+		const payload = { err: error };
+		if (this.#logger)
+			this.#logger.error("Redis event listener failed", payload);
+		else console.error("[redis] event listener failed", payload);
 	}
 
 	/**
@@ -348,11 +363,13 @@ export class QuasarManager<
 }
 
 /**
- * Install every ioredis command on the prototype, each resolving the default
+ * Install the Redis commands on the prototype, each resolving the default
  * connection at CALL time — not at construction, when no connection is open yet
- * and the default one may since have been quit and reopened.
+ * and the default one may since have been quit and reopened. Upstream's list
+ * (`methods.ts`): no EventEmitter internal reaches the default connection's
+ * client through here.
  */
-for (const method of ioredisCommandNames()) {
+for (const method of BASE_METHODS) {
 	if (method in QuasarManager.prototype) continue;
 	Reflect.set(
 		QuasarManager.prototype,
@@ -369,29 +386,4 @@ for (const method of ioredisCommandNames()) {
 			return Reflect.apply(command, connection, args);
 		},
 	);
-}
-
-/**
- * Every command ioredis defines, walking the prototype chain: the commands live
- * on `Commander.prototype`, the PARENT of `Redis.prototype`, so looking only at
- * Redis' own properties finds none of them.
- *
- * Read as descriptors, never with `Reflect.get`: the chain carries accessors
- * (`autoPipelineQueueSize`) that read `this`, and getting one off a bare
- * prototype runs it against no instance and throws.
- */
-function ioredisCommandNames(): string[] {
-	const names = new Set<string>();
-	for (
-		let target: object | null = Redis.prototype;
-		target !== null && target !== Object.prototype;
-		target = Object.getPrototypeOf(target)
-	) {
-		for (const key of Object.getOwnPropertyNames(target)) {
-			if (key === "constructor" || key.startsWith("_")) continue;
-			const descriptor = Object.getOwnPropertyDescriptor(target, key);
-			if (typeof descriptor?.value === "function") names.add(key);
-		}
-	}
-	return [...names];
 }
