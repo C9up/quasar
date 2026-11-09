@@ -1,3 +1,4 @@
+import { ConfigStore, Container } from "@c9up/ream";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ConnectionConfig, QuasarConfig } from "../src/config.js";
 import QuasarProvider, { type QuasarAppContext } from "../src/provider.js";
@@ -148,5 +149,46 @@ describe("the accessor before initialization", () => {
 		const seated = getQuasar();
 		if (seated) clearQuasar(seated);
 		expect(() => redis.connection()).toThrow(/accessed before initialization/);
+	});
+});
+
+/**
+ * ream's own Container has `bindValue`, and that branch bound only `redis`:
+ * `quasar.redis`, which the ContainerBindings augmentation types, type-checked
+ * and then threw "No binding found" in every real ream application.
+ */
+describe("QuasarProvider > on ream's Container", () => {
+	it("binds both tokens it declares to the same manager", async () => {
+		const container = new Container();
+		const store = new ConfigStore();
+		store.set("redis", config);
+		const provider = new QuasarProvider({ container, config: store });
+		provider.register();
+
+		const namespaced = await container.make("quasar.redis");
+		const bare = await container.make("redis");
+
+		expect(namespaced).toBeInstanceOf(QuasarManager);
+		expect(namespaced).toBe(bare);
+		await provider.shutdown();
+	});
+
+	it("binds both through singleton() on a container without bindValue", async () => {
+		const bound = new Map<unknown, unknown>();
+		const store = new ConfigStore();
+		store.set("redis", config);
+		const provider = new QuasarProvider({
+			container: {
+				singleton(token: unknown, factory: () => unknown) {
+					bound.set(token, factory());
+				},
+			},
+			config: store,
+		});
+		provider.register();
+
+		expect(bound.get("quasar.redis")).toBeInstanceOf(QuasarManager);
+		expect(bound.get("quasar.redis")).toBe(bound.get("redis"));
+		await provider.shutdown();
 	});
 });

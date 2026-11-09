@@ -52,16 +52,18 @@ export default class QuasarProvider {
 		this.#manager = manager;
 		setQuasar(manager);
 
-		if (this.#app.container.bindValue) {
-			this.#app.container.bindValue("redis", manager);
-		} else {
-			// Namespaced by the package that owns it, the way upstream namespaces
-			// `lucid.db`, `auth.manager` and `drive.manager` by theirs. The bare
-			// token stays bound beside it: it is what every existing
-			// `container.make(...)` asks for, and a token is not worth breaking an
-			// application over.
-			this.#app.container.singleton("quasar.redis", () => manager);
-			this.#app.container.singleton("redis", () => manager);
+		// Namespaced by the package that owns it, the way upstream namespaces
+		// `lucid.db`, `auth.manager` and `drive.manager` by theirs. The bare
+		// token stays bound beside it: it is what every existing
+		// `container.make(...)` asks for, and a token is not worth breaking an
+		// application over. Both, whichever API the container offers — the
+		// augmentation types both.
+		for (const token of ["quasar.redis", "redis"]) {
+			if (this.#app.container.bindValue) {
+				this.#app.container.bindValue(token, manager);
+			} else {
+				this.#app.container.singleton(token, () => manager);
+			}
 		}
 	}
 
