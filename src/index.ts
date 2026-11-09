@@ -31,8 +31,17 @@ export type {
 	StandaloneConnectionConfig,
 } from "./config.js";
 export { defineConfig, isClusterConfig } from "./config.js";
-export type { HealthResult, HealthStatus } from "./health.js";
-export { QuasarCheck, QuasarMemoryUsageCheck } from "./health.js";
+export type {
+	CheckedConnection,
+	HealthResult,
+	HealthStatus,
+} from "./health.js";
+export {
+	errors,
+	InvalidBytesValueError,
+	QuasarCheck,
+	QuasarMemoryUsageCheck,
+} from "./health.js";
 export type {
 	ChannelHandler,
 	PatternHandler,

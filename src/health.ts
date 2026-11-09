@@ -1,21 +1,63 @@
 /**
  * Health checks, so a readiness endpoint can answer for Redis too.
  *
- * Both return a plain result rather than throwing: a health endpoint reports,
- * it does not crash. `QuasarCheck` proves the server answers; `MemoryUsageCheck`
- * reads `INFO memory` and compares against the thresholds you set.
+ * Shaped like upstream's `RedisCheck` / `RedisMemoryUsageCheck`, which extend
+ * the framework's `BaseCheck`: a per-connection name, `as()`, `cacheFor()`,
+ * and a result carrying `finishedAt`. Quasar is a leaf and does not import
+ * ream, so the base is carried here and the contract is met structurally —
+ * both checks register with ream's `HealthChecks` as they are.
+ *
+ * Both return a result rather than throwing: a health endpoint reports, it
+ * does not crash.
  */
 
 import { isRetired, type QuasarConnection } from "./QuasarConnection.js";
+import { durationToSeconds, formatBytes, parseBytes } from "./units.js";
 
 export type HealthStatus = "ok" | "warning" | "error";
 
+/** What a check answers: ream's (and Adonis') `HealthCheckResult`. */
 export interface HealthResult {
-	name: string;
-	status: HealthStatus;
 	message: string;
+	status: HealthStatus;
+	finishedAt: Date;
 	meta?: Record<string, unknown>;
 }
+
+/**
+ * What a check reads off a connection. A `QuasarConnection` is one; the type
+ * is structural so a check can be exercised without a socket.
+ */
+export interface CheckedConnection {
+	readonly connectionName: string;
+	readonly status: string;
+	readonly lastError: unknown;
+	isConnecting(): boolean;
+	isReady(): boolean;
+	isClosed(): boolean;
+	readonly ioConnection: {
+		ping(): Promise<string>;
+		info(section: string): Promise<string>;
+		connect(): Promise<void>;
+	};
+}
+
+/**
+ * Raised for a memory threshold that cannot be read as a size. The code is
+ * upstream's, verbatim.
+ */
+export class InvalidBytesValueError extends Error {
+	readonly code = "E_INVALID_BYTES_VALUE";
+	readonly status = 500;
+
+	constructor(value: unknown) {
+		super(`Invalid bytes value "${String(value)}"`);
+		this.name = "InvalidBytesValueError";
+	}
+}
+
+/** Upstream exports its error classes under `errors`; so does quasar. */
+export const errors = { E_INVALID_BYTES_VALUE: InvalidBytesValueError };
 
 /**
  * How long a check waits on a connection that is still dialling, and in how
@@ -25,6 +67,146 @@ export interface HealthResult {
 const SETTLE_ATTEMPTS = 3;
 const SETTLE_STEP_MS = 1_000;
 
+/** The part of ream's `BaseCheck` a check needs: a name, renaming, caching. */
+abstract class Check {
+	abstract name: string;
+	/** Seconds to reuse a previous result for. */
+	cacheDuration?: number;
+
+	/** Rename the check, so two checks of one kind stay distinguishable. */
+	as(name: string): this {
+		this.name = name;
+		return this;
+	}
+
+	/** Reuse the result for this long — `60`, `'30s'`, `'1 minute'`. */
+	cacheFor(duration: string | number): this {
+		this.cacheDuration = durationToSeconds(duration);
+		return this;
+	}
+
+	abstract run(): Promise<HealthResult>;
+}
+
+/** PING the server and report whether it answered. */
+export class QuasarCheck extends Check {
+	name: string;
+	readonly #connection: CheckedConnection;
+
+	constructor(connection: CheckedConnection) {
+		super();
+		this.#connection = connection;
+		this.name = `Redis health check (${connection.connectionName})`;
+	}
+
+	async run(): Promise<HealthResult> {
+		try {
+			const unreachable = await settle(this.#connection);
+			if (unreachable !== undefined) return unreachable;
+			const reply = await this.#connection.ioConnection.ping();
+			// Upstream takes any reply as success; a server answering LOADING
+			// is not ready to serve.
+			return reply === "PONG"
+				? result(
+						"ok",
+						"Successfully connected to the redis server",
+						this.#connection,
+					)
+				: result(
+						"error",
+						`The redis server replied ${JSON.stringify(reply)} to PING`,
+						this.#connection,
+					);
+		} catch (error) {
+			return failed(error, this.#connection);
+		}
+	}
+}
+
+/** Compare the server's memory use against a warning and a failure threshold. */
+export class QuasarMemoryUsageCheck<
+	Connection extends CheckedConnection = QuasarConnection,
+> extends Check {
+	name: string;
+	readonly #connection: Connection;
+	#warnAt = DEFAULT_WARN_BYTES;
+	#failAt = DEFAULT_FAIL_BYTES;
+	#compute: (connection: Connection) => Promise<number | null> = async (
+		connection,
+	) => readUsedMemory(await connection.ioConnection.info("memory"));
+
+	constructor(connection: Connection) {
+		super();
+		this.#connection = connection;
+		this.name = `Redis memory consumption health check (${connection.connectionName})`;
+	}
+
+	/** Warn past this size — bytes, or `'100 mb'`. */
+	warnWhenExceeds(value: string | number): this {
+		this.#warnAt = bytesOf(value);
+		return this;
+	}
+
+	/** Fail past this size — bytes, or `'120 mb'`. */
+	failWhenExceeds(value: string | number): this {
+		this.#failAt = bytesOf(value);
+		return this;
+	}
+
+	/** Measure memory use some other way; answer `null` when it cannot be read. */
+	compute(callback: (connection: Connection) => Promise<number | null>): this {
+		this.#compute = callback;
+		return this;
+	}
+
+	async run(): Promise<HealthResult> {
+		try {
+			const unreachable = await settle(this.#connection);
+			if (unreachable !== undefined) return unreachable;
+			const used = await this.#compute(this.#connection);
+			if (used === null || !Number.isFinite(used)) {
+				return result(
+					"error",
+					"Check failed. Unable to get redis memory info",
+					this.#connection,
+				);
+			}
+			const meta = {
+				memoryInBytes: {
+					used,
+					warningThreshold: this.#warnAt,
+					failureThreshold: this.#failAt,
+				},
+			};
+			const usage = formatBytes(used);
+			if (used > this.#failAt) {
+				return result(
+					"error",
+					`Redis memory usage is ${usage}, which is above the threshold of ${formatBytes(this.#failAt)}`,
+					this.#connection,
+					meta,
+				);
+			}
+			if (used > this.#warnAt) {
+				return result(
+					"warning",
+					`Redis memory usage is ${usage}, which is above the threshold of ${formatBytes(this.#warnAt)}`,
+					this.#connection,
+					meta,
+				);
+			}
+			return result(
+				"ok",
+				`Redis memory usage is ${usage}, which is under the defined thresholds`,
+				this.#connection,
+				meta,
+			);
+		} catch (error) {
+			return failed(error, this.#connection);
+		}
+	}
+}
+
 /**
  * Adonis' defaults, in bytes. A check with no thresholds set must still be able
  * to fail — `Infinity` made one that always reported ok, which reads as a
@@ -33,107 +215,10 @@ const SETTLE_STEP_MS = 1_000;
 const DEFAULT_WARN_BYTES = 100 * 1024 * 1024;
 const DEFAULT_FAIL_BYTES = 120 * 1024 * 1024;
 
-/** PING the server and report whether it answered. */
-export class QuasarCheck {
-	readonly name = "redis";
-	readonly #connection: QuasarConnection;
-
-	constructor(connection: QuasarConnection) {
-		this.#connection = connection;
-	}
-
-	async run(): Promise<HealthResult> {
-		try {
-			const unreachable = await settle(this.#connection);
-			if (unreachable !== undefined) {
-				return { name: this.name, status: "error", ...unreachable };
-			}
-			const reply = await this.#connection.ioConnection.ping();
-			return reply === "PONG"
-				? {
-						name: this.name,
-						status: "ok",
-						message: `"${this.#connection.name}" answers`,
-						meta: metaOf(this.#connection),
-					}
-				: {
-						name: this.name,
-						status: "error",
-						message: `"${this.#connection.name}" replied ${JSON.stringify(reply)} to PING`,
-						meta: metaOf(this.#connection),
-					};
-		} catch (error) {
-			return {
-				name: this.name,
-				status: "error",
-				message: `"${this.#connection.name}" is unreachable: ${messageOf(error)}`,
-				meta: metaOf(this.#connection),
-			};
-		}
-	}
-}
-
-/** Compare `used_memory` against a warning and a failure threshold. */
-export class QuasarMemoryUsageCheck {
-	readonly name = "redis:memory";
-	readonly #connection: QuasarConnection;
-	#warnAt = DEFAULT_WARN_BYTES;
-	#failAt = DEFAULT_FAIL_BYTES;
-
-	constructor(connection: QuasarConnection) {
-		this.#connection = connection;
-	}
-
-	/** Warn past this many bytes. */
-	warnWhenExceeds(bytes: number): this {
-		this.#warnAt = bytes;
-		return this;
-	}
-
-	/** Fail past this many bytes. */
-	failWhenExceeds(bytes: number): this {
-		this.#failAt = bytes;
-		return this;
-	}
-
-	async run(): Promise<HealthResult> {
-		try {
-			const unreachable = await settle(this.#connection);
-			if (unreachable !== undefined) {
-				return { name: this.name, status: "error", ...unreachable };
-			}
-			const info = await this.#connection.ioConnection.info("memory");
-			const used = readUsedMemory(info);
-			if (used === undefined) {
-				return {
-					name: this.name,
-					status: "error",
-					message: "INFO memory carried no used_memory field",
-					meta: metaOf(this.#connection),
-				};
-			}
-			const status: HealthStatus =
-				used > this.#failAt ? "error" : used > this.#warnAt ? "warning" : "ok";
-			return {
-				name: this.name,
-				status,
-				message: `${this.#connection.name} uses ${used} bytes`,
-				meta: {
-					...metaOf(this.#connection),
-					usedMemory: used,
-					warnAt: this.#warnAt,
-					failAt: this.#failAt,
-				},
-			};
-		} catch (error) {
-			return {
-				name: this.name,
-				status: "error",
-				message: `"${this.#connection.name}" is unreachable: ${messageOf(error)}`,
-				meta: metaOf(this.#connection),
-			};
-		}
-	}
+function bytesOf(value: string | number): number {
+	const bytes = parseBytes(value);
+	if (bytes === null) throw new InvalidBytesValueError(value);
+	return bytes;
 }
 
 /**
@@ -157,8 +242,8 @@ export class QuasarMemoryUsageCheck {
  * any more the revived socket survives shutdown and keeps the process alive.
  */
 async function settle(
-	connection: QuasarConnection,
-): Promise<{ message: string; meta: Record<string, unknown> } | undefined> {
+	connection: CheckedConnection,
+): Promise<HealthResult | undefined> {
 	let waited = 0;
 	let reconnected = false;
 	for (;;) {
@@ -172,10 +257,11 @@ async function settle(
 			continue;
 		}
 		if (connection.isClosed() && isRetired(connection)) {
-			return {
-				message: `"${connection.name}" was closed and is no longer in use`,
-				meta: metaOf(connection),
-			};
+			return result(
+				"error",
+				`The redis connection "${connection.connectionName}" was closed and is no longer in use`,
+				connection,
+			);
 		}
 		// `end` only: from `close` ioredis reconnects by itself, and dialling
 		// as well would race its retry timer with a second socket.
@@ -185,13 +271,12 @@ async function settle(
 			continue;
 		}
 		if (connection.isReady()) return undefined;
-		const reason = connection.lastError;
-		return {
-			message:
-				`unable to reach "${connection.name}"` +
-				(reason === undefined ? "" : `: ${messageOf(reason)}`),
-			meta: metaOf(connection),
-		};
+		return result(
+			"error",
+			"Unable to connect to the redis server",
+			connection,
+			connection.lastError === undefined ? {} : { error: connection.lastError },
+		);
 	}
 }
 
@@ -201,9 +286,35 @@ function delay(ms: number): Promise<void> {
 	});
 }
 
-/** What a health report says about the connection itself, as Adonis reports it. */
-function metaOf(connection: QuasarConnection): Record<string, unknown> {
-	return { connection: connection.name, status: connection.status };
+/** A result, with the connection described the way Adonis' meta does it. */
+function result(
+	status: HealthStatus,
+	message: string,
+	connection: CheckedConnection,
+	meta: Record<string, unknown> = {},
+): HealthResult {
+	return {
+		message,
+		status,
+		finishedAt: new Date(),
+		meta: {
+			...meta,
+			connection: {
+				name: connection.connectionName,
+				status: connection.status,
+			},
+		},
+	};
+}
+
+/** Upstream's `Result.failed(error)`: the error's message, the error in meta. */
+function failed(error: unknown, connection: CheckedConnection): HealthResult {
+	return result(
+		"error",
+		error instanceof Error ? error.message : String(error),
+		connection,
+		{ error },
+	);
 }
 
 /**
@@ -212,15 +323,11 @@ function metaOf(connection: QuasarConnection): Record<string, unknown> {
  * Anchored on the colon, unlike Adonis, which matches the line PREFIX and so
  * would read `used_memory_rss` had Redis ever ordered the section differently.
  */
-function readUsedMemory(info: string): number | undefined {
+function readUsedMemory(info: string): number | null {
 	const line = info
 		.split(/\r?\n/)
 		.find((entry) => entry.startsWith("used_memory:"));
-	if (line === undefined) return undefined;
+	if (line === undefined) return null;
 	const value = Number(line.slice("used_memory:".length).trim());
-	return Number.isFinite(value) ? value : undefined;
-}
-
-function messageOf(error: unknown): string {
-	return error instanceof Error ? error.message : String(error);
+	return Number.isFinite(value) ? value : null;
 }

@@ -536,13 +536,13 @@ export class QuasarConnection {
  * it stays off the public surface; the manager and the checks reach it
  * through the two functions below.
  */
-const retired = new WeakSet<QuasarConnection>();
+const retired = new WeakSet<object>();
 
 export function retire(connection: QuasarConnection): void {
 	retired.add(connection);
 }
 
-export function isRetired(connection: QuasarConnection): boolean {
+export function isRetired(connection: object): boolean {
 	return retired.has(connection);
 }
 

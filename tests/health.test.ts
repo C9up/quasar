@@ -1,7 +1,16 @@
+import { type HealthCheckContract, HealthChecks } from "@c9up/ream/health";
 import { describe, expect, it, vi } from "vitest";
-import { QuasarCheck, QuasarMemoryUsageCheck } from "../src/health.js";
-import type { QuasarConnection } from "../src/QuasarConnection.js";
+import {
+	type CheckedConnection,
+	errors,
+	QuasarCheck,
+	QuasarMemoryUsageCheck,
+} from "../src/health.js";
 import { QuasarManager } from "../src/QuasarManager.js";
+
+const unexpected = async (): Promise<never> => {
+	throw new Error("not expected to be called");
+};
 
 /**
  * A connection stand-in carrying only what the checks read.
@@ -13,22 +22,25 @@ import { QuasarManager } from "../src/QuasarManager.js";
 function connectionWith(
 	io: {
 		ping?: () => Promise<string>;
-		info?: () => Promise<string>;
+		info?: (section: string) => Promise<string>;
 		connect?: () => Promise<void>;
 	},
-	state?: { status?: string; lastError?: unknown },
-) {
+	state?: { status?: string; lastError?: unknown; name?: string },
+): CheckedConnection {
 	const status = state?.status ?? "ready";
-	const connection = {
-		name: "main",
-		ioConnection: io,
+	return {
+		connectionName: state?.name ?? "main",
 		status,
 		lastError: state?.lastError,
 		isConnecting: () => status === "connecting" || status === "reconnecting",
 		isReady: () => status === "ready" || status === "connect",
 		isClosed: () => status === "end" || status === "close",
+		ioConnection: {
+			ping: io.ping ?? unexpected,
+			info: io.info ?? unexpected,
+			connect: io.connect ?? unexpected,
+		},
 	};
-	return connection as unknown as QuasarConnection;
 }
 
 describe("QuasarCheck", () => {
@@ -36,7 +48,13 @@ describe("QuasarCheck", () => {
 		const result = await new QuasarCheck(
 			connectionWith({ ping: async () => "PONG" }),
 		).run();
+
 		expect(result.status).toBe("ok");
+		expect(result.message).toBe("Successfully connected to the redis server");
+		expect(result.finishedAt).toBeInstanceOf(Date);
+		expect(result.meta).toEqual({
+			connection: { name: "main", status: "ready" },
+		});
 	});
 
 	it("reports the reply verbatim when it is not PONG", async () => {
@@ -48,15 +66,19 @@ describe("QuasarCheck", () => {
 	});
 
 	it("reports unreachable rather than throwing — a health endpoint answers", async () => {
+		const failure = new Error("ECONNREFUSED");
 		const result = await new QuasarCheck(
 			connectionWith({
 				ping: async () => {
-					throw new Error("ECONNREFUSED");
+					throw failure;
 				},
 			}),
 		).run();
+
 		expect(result.status).toBe("error");
-		expect(result.message).toContain("ECONNREFUSED");
+		expect(result.message).toBe("ECONNREFUSED");
+		expect(result.meta?.error).toBe(failure);
+		expect(result.finishedAt).toBeInstanceOf(Date);
 	});
 });
 
@@ -71,25 +93,26 @@ describe("QuasarCheck", () => {
 describe("a check does not wait on a connection that is not ready", () => {
 	it("refuses to ping one that already recorded a failure", async () => {
 		const ping = vi.fn(async () => "PONG");
+		const failure = new Error("ECONNREFUSED");
 		const result = await new QuasarCheck(
-			connectionWith(
-				{ ping },
-				{ status: "connecting", lastError: new Error("ECONNREFUSED") },
-			),
+			connectionWith({ ping }, { status: "connecting", lastError: failure }),
 		).run();
 
 		expect(ping).not.toHaveBeenCalled();
 		expect(result.status).toBe("error");
-		expect(result.message).toContain("ECONNREFUSED");
+		expect(result.message).toBe("Unable to connect to the redis server");
+		expect(result.meta?.error).toBe(failure);
 	});
 
 	it("says which connection, and what state it was in", async () => {
 		const result = await new QuasarCheck(
-			connectionWith({}, { status: "reconnecting" }),
+			connectionWith({}, { status: "close" }),
 		).run();
 
 		expect(result.status).toBe("error");
-		expect(result.meta).toEqual({ connection: "main", status: "reconnecting" });
+		expect(result.meta).toEqual({
+			connection: { name: "main", status: "close" },
+		});
 	});
 
 	/**
@@ -154,6 +177,9 @@ describe("QuasarMemoryUsageCheck", () => {
 		).run();
 
 		expect(result.status).toBe("error");
+		expect(result.message).toBe(
+			"Redis memory usage is 200MB, which is above the threshold of 120MB",
+		);
 	});
 
 	it("warns at Adonis' warning default", async () => {
@@ -166,17 +192,25 @@ describe("QuasarMemoryUsageCheck", () => {
 	});
 
 	const info = (used: number) => async () =>
-		`# Memory\r\nused_memory:${used}\r\nmaxmemory:0\r\n`;
+		`# Memory\r\nused_memory:${used}\r\nused_memory_rss:999999999\r\n`;
 
-	it("stays ok below the warning threshold", async () => {
+	it("stays ok below the warning threshold, and says by how much", async () => {
 		const check = new QuasarMemoryUsageCheck(
 			connectionWith({ info: info(100) }),
 		)
 			.warnWhenExceeds(400)
 			.failWhenExceeds(800);
 		const result = await check.run();
+
 		expect(result.status).toBe("ok");
-		expect(result.meta?.usedMemory).toBe(100);
+		expect(result.meta).toEqual({
+			memoryInBytes: {
+				used: 100,
+				warningThreshold: 400,
+				failureThreshold: 800,
+			},
+			connection: { name: "main", status: "ready" },
+		});
 	});
 
 	it("warns between the two thresholds", async () => {
@@ -197,12 +231,114 @@ describe("QuasarMemoryUsageCheck", () => {
 		expect((await check.run()).status).toBe("error");
 	});
 
+	it("reads thresholds written as sizes, as upstream does", async () => {
+		const check = new QuasarMemoryUsageCheck(
+			connectionWith({ info: info(150 * 1024 * 1024) }),
+		)
+			.warnWhenExceeds("100 mb")
+			.failWhenExceeds("1gb");
+		const result = await check.run();
+
+		expect(result.status).toBe("warning");
+		expect(result.meta?.memoryInBytes).toEqual({
+			used: 150 * 1024 * 1024,
+			warningThreshold: 100 * 1024 * 1024,
+			failureThreshold: 1024 ** 3,
+		});
+	});
+
+	it("refuses a threshold it cannot read, with upstream's code", () => {
+		const check = new QuasarMemoryUsageCheck(connectionWith({}));
+
+		expect(() => check.warnWhenExceeds("lots")).toThrow(
+			errors.E_INVALID_BYTES_VALUE,
+		);
+		expect(() => check.failWhenExceeds("ten mb")).toThrow(
+			expect.objectContaining({ code: "E_INVALID_BYTES_VALUE" }),
+		);
+	});
+
 	it("says so when INFO carries no used_memory", async () => {
 		const check = new QuasarMemoryUsageCheck(
 			connectionWith({ info: async () => "# Memory\r\n" }),
 		);
 		const result = await check.run();
 		expect(result.status).toBe("error");
-		expect(result.message).toContain("used_memory");
+		expect(result.message).toBe(
+			"Check failed. Unable to get redis memory info",
+		);
+	});
+
+	it("measures through compute() when one is given", async () => {
+		const info = vi.fn(async () => "used_memory:1\r\n");
+		const check = new QuasarMemoryUsageCheck(connectionWith({ info }))
+			.warnWhenExceeds(10)
+			.compute(async () => 50);
+
+		expect((await check.run()).status).toBe("warning");
+		expect(info).not.toHaveBeenCalled();
+	});
+});
+
+describe("quasar checks in ream's HealthChecks", () => {
+	it("are health check contracts as they are", () => {
+		const checks: HealthCheckContract[] = [
+			new QuasarCheck(connectionWith({})),
+			new QuasarMemoryUsageCheck(connectionWith({})),
+		];
+
+		expect(checks).toHaveLength(2);
+	});
+
+	it("name each connection apart, in upstream's words", () => {
+		const main = connectionWith({}, { name: "main" });
+		const cache = connectionWith({}, { name: "cache" });
+
+		expect(new QuasarCheck(main).name).toBe("Redis health check (main)");
+		expect(new QuasarCheck(cache).name).toBe("Redis health check (cache)");
+		expect(new QuasarMemoryUsageCheck(cache).name).toBe(
+			"Redis memory consumption health check (cache)",
+		);
+		expect(new QuasarCheck(main).as("primary").name).toBe("primary");
+	});
+
+	it("report two connections as two entries", async () => {
+		const report = await new HealthChecks()
+			.register([
+				new QuasarCheck(
+					connectionWith({ ping: async () => "PONG" }, { name: "main" }),
+				),
+				new QuasarCheck(
+					connectionWith({ ping: async () => "PONG" }, { name: "cache" }),
+				),
+			])
+			.run();
+
+		expect(report.checks.map((check) => check.name)).toEqual([
+			"Redis health check (main)",
+			"Redis health check (cache)",
+		]);
+		expect(report.isHealthy).toBe(true);
+	});
+
+	it("serve a cached result for as long as cacheFor() says", async () => {
+		const ping = vi.fn(async () => "PONG");
+		const check = new QuasarCheck(connectionWith({ ping })).cacheFor(
+			"1 minute",
+		);
+		const checks = new HealthChecks().register([check]);
+
+		await checks.run();
+		const second = await checks.run();
+
+		expect(check.cacheDuration).toBe(60);
+		expect(ping).toHaveBeenCalledOnce();
+		expect(second.checks[0]?.isCached).toBe(true);
+	});
+
+	it("refuse a cache duration they cannot read", () => {
+		expect(() => new QuasarCheck(connectionWith({})).cacheFor("soon")).toThrow(
+			/cannot read "soon" as a duration/,
+		);
 	});
 });
