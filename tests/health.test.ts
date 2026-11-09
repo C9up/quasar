@@ -14,6 +14,7 @@ function connectionWith(
 	io: {
 		ping?: () => Promise<string>;
 		info?: () => Promise<string>;
+		connect?: () => Promise<void>;
 	},
 	state?: { status?: string; lastError?: unknown },
 ) {
@@ -23,9 +24,9 @@ function connectionWith(
 		ioConnection: io,
 		status,
 		lastError: state?.lastError,
-		isConnecting: () => status === "connecting",
-		isReady: () => status === "ready",
-		isClosed: () => status === "end",
+		isConnecting: () => status === "connecting" || status === "reconnecting",
+		isReady: () => status === "ready" || status === "connect",
+		isClosed: () => status === "end" || status === "close",
 	};
 	return connection as unknown as QuasarConnection;
 }
@@ -89,6 +90,24 @@ describe("a check does not wait on a connection that is not ready", () => {
 
 		expect(result.status).toBe("error");
 		expect(result.meta).toEqual({ connection: "main", status: "reconnecting" });
+	});
+
+	/**
+	 * `close` counts as closed (upstream's isClosed), but ioredis is about to
+	 * reconnect on its own from there: dialling it too would race the retry
+	 * timer with a second socket. Only `end` is dialled.
+	 */
+	it("does not dial a connection ioredis is about to reconnect", async () => {
+		const connect = vi.fn(async () => {});
+		const result = await new QuasarCheck(
+			connectionWith(
+				{ connect },
+				{ status: "close", lastError: new Error("ECONNRESET") },
+			),
+		).run();
+
+		expect(connect).not.toHaveBeenCalled();
+		expect(result.status).toBe("error");
 	});
 
 	it("does the same before reading INFO memory", async () => {

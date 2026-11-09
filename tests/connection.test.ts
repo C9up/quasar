@@ -52,6 +52,32 @@ describe("quasar > what a connection reports about itself", () => {
 		expect(c.isClosed()).toBe(false);
 	});
 
+	/**
+	 * Upstream's status sets. Between two reconnect attempts ioredis reports
+	 * `reconnecting`, and all three answered false — a health check took that
+	 * for a dead server instead of one still dialling.
+	 */
+	for (const [status, expected] of [
+		["wait", { connecting: false, ready: false, closed: false }],
+		["connecting", { connecting: true, ready: false, closed: false }],
+		["reconnecting", { connecting: true, ready: false, closed: false }],
+		["connect", { connecting: false, ready: true, closed: false }],
+		["ready", { connecting: false, ready: true, closed: false }],
+		["close", { connecting: false, ready: false, closed: true }],
+		["end", { connecting: false, ready: false, closed: true }],
+	] as const) {
+		it(`answers like upstream while ioredis is "${status}"`, () => {
+			const c = connection();
+			Reflect.set(c.ioConnection, "status", status);
+
+			expect({
+				connecting: c.isConnecting(),
+				ready: c.isReady(),
+				closed: c.isClosed(),
+			}).toEqual(expected);
+		});
+	}
+
 	it("has no subscriber socket until a subscribe opens one", () => {
 		const c = connection();
 

@@ -177,7 +177,9 @@ async function settle(
 				meta: metaOf(connection),
 			};
 		}
-		if (connection.isClosed() && !reconnected) {
+		// `end` only: from `close` ioredis reconnects by itself, and dialling
+		// as well would race its retry timer with a second socket.
+		if (connection.status === "end" && !reconnected) {
 			reconnected = true;
 			await connection.ioConnection.connect();
 			continue;

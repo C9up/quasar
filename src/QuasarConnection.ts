@@ -187,16 +187,19 @@ export class QuasarConnection {
 		return this.#client.autoPipelineQueueSize;
 	}
 
+	/** Dialling, or waiting between two reconnect attempts. */
 	isConnecting(): boolean {
-		return this.status === "connecting";
+		return this.status === "connecting" || this.status === "reconnecting";
 	}
 
+	/** Connected — `connect` is the moment before the ready check answers. */
 	isReady(): boolean {
-		return this.status === "ready";
+		return this.status === "ready" || this.status === "connect";
 	}
 
+	/** Closed: for now (`close`, a reconnect may follow) or for good (`end`). */
 	isClosed(): boolean {
-		return this.status === "end";
+		return this.status === "end" || this.status === "close";
 	}
 
 	/** Register a LUA script as a command, callable through {@link runCommand}. */
