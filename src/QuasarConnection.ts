@@ -706,7 +706,20 @@ function makeClient(config: ConnectionConfig): RedisClient {
 		...(port === undefined ? {} : { port: toPort(port) }),
 		...credentials(password, sentinelPassword),
 	};
-	return url === undefined ? new Redis(options) : new Redis(url, options);
+	return url === undefined
+		? new Redis(options)
+		: new Redis(lowercaseScheme(url), options);
+}
+
+/**
+ * The URL with a `redis`/`rediss` scheme in lowercase.
+ *
+ * Schemes are case-insensitive, and the client parses `REDISS://` like any
+ * other URL, but it turns TLS on only for a literal `rediss://`: the
+ * uppercase spelling dialled in plaintext, with nothing to say so.
+ */
+function lowercaseScheme(url: string): string {
+	return url.replace(/^rediss?:\/\//i, (scheme) => scheme.toLowerCase());
 }
 
 /** The released passwords, each present only when it was configured. */
