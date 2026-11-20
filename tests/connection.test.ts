@@ -6,6 +6,7 @@
  * command dispatcher, and the error wiring — the part whose whole job is to
  * keep an `error` event from taking the process down.
  */
+import { Cluster } from "ioredis";
 import { describe, expect, it, vi } from "vitest";
 import { QuasarConnection } from "../src/QuasarConnection.js";
 
@@ -471,5 +472,54 @@ describe("quasar > pub/sub without a server answering", () => {
 		subscriber.emit("error", new Error("subscriber down"));
 
 		expect(logger.error).toHaveBeenCalledOnce();
+	});
+});
+
+/**
+ * Upstream's connections expose `mode` / `subscribeMode`, and its cluster
+ * connection `slots` / `nodes(role)` — the documented way to run a command on
+ * every master. Quasar has one connection class for both kinds.
+ */
+describe("quasar > mode, subscribeMode, slots and nodes", () => {
+	const cluster = () =>
+		new QuasarConnection("cluster", {
+			clusters: [{ host: "127.0.0.1", port: 7000 }],
+			clusterOptions: { lazyConnect: true },
+		});
+
+	it("reports ioredis' mode, and the subscriber's once one is open", async () => {
+		const c = connection().doNotLogErrors();
+
+		expect(c.mode).toBe("normal");
+		expect(c.subscribeMode).toBeUndefined();
+
+		c.subscribe("news", () => {});
+		expect(c.subscribeMode).toBe("normal");
+		await c.disconnect();
+	});
+
+	it("has no mode on a cluster, as ioredis' Cluster has none", () => {
+		expect(cluster().mode).toBeUndefined();
+	});
+
+	it("hands a cluster's nodes and slots over from ioredis", () => {
+		const c = cluster();
+		const client = c.ioConnection;
+		if (!(client instanceof Cluster)) throw new Error("not a cluster");
+		const nodes = vi.spyOn(client, "nodes");
+
+		expect(c.nodes("master")).toEqual([]);
+		expect(nodes).toHaveBeenCalledWith("master");
+		expect(c.nodes()).toEqual([]);
+		expect(c.slots).toBe(client.slots);
+	});
+
+	it("refuses nodes() on a standalone connection, with a message that says why", () => {
+		const c = connection("cache");
+
+		expect(c.slots).toBeUndefined();
+		expect(() => c.nodes("master")).toThrow(
+			/connection "cache" is not a cluster/,
+		);
 	});
 });

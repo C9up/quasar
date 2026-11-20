@@ -59,6 +59,20 @@ describe.skipIf(!live)("QuasarConnection against a live server", () => {
 		expect(connection.ioSubscriberConnection).toBeDefined();
 	});
 
+	// ioredis' own answer, whatever it is: over RESP3 (ioredis 6's default
+	// against Redis 7+) a subscribed socket still runs commands, and ioredis
+	// reports it `normal`; over RESP2 it reports `subscriber`.
+	it("reports the subscriber socket's mode once it has subscribed", async () => {
+		const connection = open();
+
+		await connection.subscribed(`redis-test:${process.pid}:mode`, () => {});
+		const subscriber = connection.ioSubscriberConnection;
+		if (!(subscriber instanceof Redis)) throw new Error("no subscriber");
+		expect(connection.mode).toBe("normal");
+		expect(connection.subscribeMode).toBe(subscriber.mode);
+		expect(["normal", "subscriber"]).toContain(connection.subscribeMode);
+	});
+
 	it("delivers a published message to the channel handler", async () => {
 		const connection = open();
 		const channel = `redis-test:${process.pid}:channel`;

@@ -11,7 +11,7 @@
  * switching between the two costs nothing.
  */
 
-import { Cluster, Redis, type RedisOptions } from "ioredis";
+import { Cluster, type NodeRole, Redis, type RedisOptions } from "ioredis";
 import {
 	type ConnectionConfig,
 	type Credential,
@@ -301,6 +301,48 @@ export class QuasarConnection extends Emitter<QuasarConnectionEvents> {
 	/** The pub/sub socket, once a subscribe has opened it. */
 	get ioSubscriberConnection(): RedisClient | undefined {
 		return this.#subscriber;
+	}
+
+	/**
+	 * ioredis' mode for the command socket: `normal`, `subscriber` or
+	 * `monitor`. `undefined` on a cluster connection — ioredis' `Cluster` has
+	 * no mode, and upstream declares it on the standalone connection only.
+	 */
+	get mode(): Redis["mode"] | undefined {
+		return this.#client instanceof Redis ? this.#client.mode : undefined;
+	}
+
+	/** {@link mode} for the pub/sub socket, `undefined` until one is opened. */
+	get subscribeMode(): Redis["mode"] | undefined {
+		return this.#subscriber instanceof Redis
+			? this.#subscriber.mode
+			: undefined;
+	}
+
+	/**
+	 * A cluster's slot table, as ioredis keeps it. `undefined` on a standalone
+	 * connection, which has none — upstream declares it on the cluster
+	 * connection only.
+	 */
+	get slots(): Cluster["slots"] | undefined {
+		return this.#client instanceof Cluster ? this.#client.slots : undefined;
+	}
+
+	/**
+	 * A cluster's nodes, all of them or one role's (`master`, `slave`) — the
+	 * way to run a command on every master, a SCAN or a FLUSHDB per node.
+	 *
+	 * Throws on a standalone connection rather than answering `[]`: upstream's
+	 * standalone connection has no such method, and an empty list would make a
+	 * per-node loop silently do nothing.
+	 */
+	nodes(role?: NodeRole): Redis[] {
+		if (!(this.#client instanceof Cluster)) {
+			throw new Error(
+				`[redis] connection "${this.name}" is not a cluster — nodes() lists a cluster's nodes`,
+			);
+		}
+		return this.#client.nodes(role);
 	}
 
 	/**
