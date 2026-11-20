@@ -68,6 +68,81 @@ describe("quasar > the manager never prints a credential", () => {
 		expect(Object.keys(manager)).not.toContain("managerConfig");
 	});
 
+	// ioredis reads every query parameter of a connection URL as a client
+	// option, so `?password=` authenticates exactly like userinfo does.
+	it.each([
+		["a redis:// URL", "redis://redis.internal:6379/0?password=hunter2"],
+		[
+			"a rediss:// URL with userinfo too",
+			"rediss://u:pw@host:6380/0?password=hunter2&username=admin",
+		],
+		["a unix socket path", "/var/run/redis.sock?password=hunter2"],
+		["a scheme-less host:port", "redis.internal:6379?password=hunter2"],
+		["a protocol-relative URL", "//redis.internal:6379?password=hunter2"],
+		[
+			"a key spelled in another case",
+			"redis://redis.internal:6379?PassWord=hunter2",
+		],
+		[
+			"a sentinel credential",
+			"redis://redis.internal:6379?sentinelPassword=hunter2",
+		],
+		["a percent-encoded key", "redis://redis.internal?pass%77ord=hunter2"],
+	])(
+		"keeps a credential in the query of %s out of the printed view",
+		(_, url) => {
+			const manager = new QuasarManager(
+				defineConfig({ connection: "main", connections: { main: { url } } }),
+			);
+
+			for (const printed of [
+				JSON.stringify(manager),
+				inspect(manager, { depth: 10 }),
+			]) {
+				expect(printed).not.toContain("hunter2");
+				expect(printed).not.toContain("admin");
+				expect(printed).not.toContain(":pw@");
+				expect(printed).toContain("[redacted]");
+			}
+		},
+	);
+
+	it("keeps the rest of the URL readable", () => {
+		const manager = new QuasarManager(
+			defineConfig({
+				connection: "main",
+				connections: {
+					main: { url: "redis://cache.internal:6379/2?password=x&db=3" },
+					plain: { url: "redis://cache.internal:6379/2?family=6" },
+					socket: { url: "/var/run/redis.sock?db=2" },
+				},
+			}),
+		);
+
+		const json = JSON.stringify(manager);
+		expect(json).toContain(
+			"redis://cache.internal:6379/2?password=[redacted]&db=3",
+		);
+		expect(json).toContain("redis://cache.internal:6379/2?family=6");
+		expect(json).toContain("/var/run/redis.sock?db=2");
+	});
+
+	it("redacts userinfo on a scheme-less or protocol-relative URL", () => {
+		const manager = new QuasarManager(
+			defineConfig({
+				connection: "main",
+				connections: {
+					main: { url: "u:hunter2@cache.internal:6379" },
+					relative: { url: "//u:hunter2@cache.internal:6379/1" },
+				},
+			}),
+		);
+
+		const json = JSON.stringify(manager);
+		expect(json).not.toContain("hunter2");
+		expect(json).toContain("[redacted]@cache.internal:6379");
+	});
+
 	it("still hands the real config to code that reads managerConfig", () => {
 		const manager = managerWith();
 
