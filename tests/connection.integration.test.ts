@@ -3,8 +3,8 @@
  * that actually bites: Redis refuses ordinary commands on a subscribed
  * socket, which is the whole reason this class opens a second one.
  *
- * Skipped, not failed, when no server answers on REDIS_TEST_URL (default
- * 127.0.0.1:6379): a contributor without Redis still gets a green suite.
+ * Needs REDIS_TEST_URL (see _support/redisTestUrl.ts), and fails, never
+ * skips, when the server it names does not answer.
  */
 
 import { Secret } from "@c9up/ream";
@@ -29,6 +29,13 @@ async function serverAnswers(): Promise<boolean> {
 }
 
 const live = await serverAnswers();
+// The URL is required (redisTestUrl throws without it), so a server that does
+// not answer it is a broken environment: fail, never skip.
+if (!live) {
+	throw new Error(
+		`REDIS_TEST_URL is set (${url}) but no server answers: the live-Redis suite cannot run.`,
+	);
+}
 const connections: QuasarConnection[] = [];
 
 function open(): QuasarConnection {
@@ -41,7 +48,7 @@ afterAll(() => {
 	for (const connection of connections) connection.disconnect();
 });
 
-describe.skipIf(!live)("QuasarConnection against a live server", () => {
+describe("QuasarConnection against a live server", () => {
 	it("runs ioredis commands straight off the connection", async () => {
 		const connection = open();
 		const key = `redis-test:${process.pid}:command`;
@@ -233,7 +240,7 @@ describe.skipIf(!live)("QuasarConnection against a live server", () => {
  * Against a server that requires a password: a Secret must authenticate both
  * sockets, not send AUTH '[redacted]'.
  */
-describe.skipIf(!live)("QuasarConnection with a Secret password", () => {
+describe("QuasarConnection with a Secret password", () => {
 	const user = `quasar-secret-${process.pid}`;
 	const admin = new Redis(url, { lazyConnect: true });
 

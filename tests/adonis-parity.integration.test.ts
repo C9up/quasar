@@ -15,8 +15,8 @@ const config = {
 };
 
 /**
- * Skipped, not failed, when the configured server does not answer — same probe
- * as `connection.integration.test.ts`. Which server that is has to be stated:
+ * Whether the configured server answers; it fails the file when it does not —
+ * same probe as `connection.integration.test.ts`. Which server that is has to be stated:
  * see `_support/redisTestUrl.ts`.
  */
 async function serverAnswers(): Promise<boolean> {
@@ -33,9 +33,15 @@ async function serverAnswers(): Promise<boolean> {
 }
 
 const live = await serverAnswers();
-const describeLive = live ? describe : describe.skip;
+// The URL is required (redisTestUrl throws without it), so a server that does
+// not answer it is a broken environment: fail, never skip.
+if (!live) {
+	throw new Error(
+		`REDIS_TEST_URL is set (${url}) but no server answers: the live-Redis suite cannot run.`,
+	);
+}
 
-describeLive("QuasarManager > @adonisjs/redis parity (live server)", () => {
+describe("QuasarManager > @adonisjs/redis parity (live server)", () => {
 	let manager: QuasarManager<typeof config.connections> | undefined;
 
 	afterEach(async () => {
@@ -100,7 +106,7 @@ describeLive("QuasarManager > @adonisjs/redis parity (live server)", () => {
 	});
 });
 
-describeLive("QuasarConnection > subscriber lifecycle (live server)", () => {
+describe("QuasarConnection > subscriber lifecycle (live server)", () => {
 	let manager: QuasarManager<typeof config.connections> | undefined;
 
 	afterEach(async () => {
@@ -141,7 +147,7 @@ describeLive("QuasarConnection > subscriber lifecycle (live server)", () => {
 	});
 });
 
-describeLive("QuasarConnection > subscription events (live server)", () => {
+describe("QuasarConnection > subscription events (live server)", () => {
 	let manager: QuasarManager<typeof config.connections> | undefined;
 
 	afterEach(async () => {
