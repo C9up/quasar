@@ -93,7 +93,12 @@ describe("quasar > a port read from the environment", () => {
 		it(`refuses "${port}" rather than falling back to a default`, () => {
 			expect(
 				() => new QuasarConnection("main", { port, lazyConnect: true }),
-			).toThrow(/is not a port number/);
+			).toThrow(
+				expect.objectContaining({
+					code: "E_QUASAR_INVALID_PORT",
+					message: expect.stringMatching(/is not a port number/),
+				}),
+			);
 		});
 	}
 });

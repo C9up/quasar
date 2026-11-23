@@ -19,6 +19,11 @@ import {
 	type RedisClient,
 } from "./config.js";
 import { Emitter } from "./emitter.js";
+import {
+	E_QUASAR_INVALID_PORT,
+	E_QUASAR_NOT_A_CLUSTER,
+	E_QUASAR_UNKNOWN_COMMAND,
+} from "./errors.js";
 import { REDIS_METHODS } from "./methods.js";
 import { redisCommand } from "./tracing.js";
 
@@ -272,9 +277,9 @@ export class QuasarConnection extends Emitter<QuasarConnectionEvents> {
 	runCommand(command: string, ...args: unknown[]): unknown {
 		const run = Reflect.get(this.#client, command);
 		if (typeof run !== "function") {
-			throw new Error(
-				`[redis] no command "${command}" on connection "${this.name}" — define it with defineCommand() first`,
-			);
+			throw new E_QUASAR_UNKNOWN_COMMAND([
+				`no command "${command}" on connection "${this.name}" — define it with defineCommand() first`,
+			]);
 		}
 		return Reflect.apply(run, this.#client, args);
 	}
@@ -338,9 +343,7 @@ export class QuasarConnection extends Emitter<QuasarConnectionEvents> {
 	 */
 	nodes(role?: NodeRole): Redis[] {
 		if (!(this.#client instanceof Cluster)) {
-			throw new Error(
-				`[redis] connection "${this.name}" is not a cluster — nodes() lists a cluster's nodes`,
-			);
+			throw new E_QUASAR_NOT_A_CLUSTER([this.name]);
 		}
 		return this.#client.nodes(role);
 	}
@@ -798,7 +801,7 @@ function toPort(port: string | number): number {
 		value < 0 ||
 		value > 65_535
 	) {
-		throw new Error(`[redis] port "${String(port)}" is not a port number`);
+		throw new E_QUASAR_INVALID_PORT([String(port)]);
 	}
 	return value;
 }

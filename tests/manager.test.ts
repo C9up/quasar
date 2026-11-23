@@ -16,7 +16,10 @@ describe("QuasarManager", () => {
 		// A typo must not open a connection that looks alive until the first
 		// command reaches the wrong server.
 		expect(() => manager.connection("cahce" as "cache")).toThrow(
-			/"cahce" is not declared/,
+			expect.objectContaining({
+				code: "E_QUASAR_UNKNOWN_CONNECTION",
+				message: expect.stringMatching(/"cahce" is not declared/),
+			}),
 		);
 		expect(manager.activeConnectionNames).toEqual([]);
 	});

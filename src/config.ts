@@ -14,6 +14,7 @@ import type {
 	Redis,
 	RedisOptions,
 } from "ioredis";
+import { E_QUASAR_INVALID_CONFIG } from "./errors.js";
 
 /**
  * A value handed over only through `release()` — ream's `Secret`, read
@@ -97,12 +98,12 @@ export function defineConfig<
 >(config: QuasarConfig<Connections>): QuasarConfig<Connections> {
 	const names = Object.keys(config.connections);
 	if (names.length === 0) {
-		throw new Error("[redis] config declares no connection");
+		throw new E_QUASAR_INVALID_CONFIG(["config declares no connection"]);
 	}
 	if (!names.includes(config.connection)) {
-		throw new Error(
-			`[redis] default connection "${config.connection}" is not declared — got ${names.join(", ")}`,
-		);
+		throw new E_QUASAR_INVALID_CONFIG([
+			`default connection "${config.connection}" is not declared — got ${names.join(", ")}`,
+		]);
 	}
 	return config;
 }

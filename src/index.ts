@@ -31,14 +31,13 @@ export type {
 	StandaloneConnectionConfig,
 } from "./config.js";
 export { defineConfig, isClusterConfig } from "./config.js";
+export * as errors from "./errors.js";
 export type {
 	CheckedConnection,
 	HealthResult,
 	HealthStatus,
 } from "./health.js";
 export {
-	errors,
-	InvalidBytesValueError,
 	QuasarCheck,
 	QuasarMemoryUsageCheck,
 } from "./health.js";

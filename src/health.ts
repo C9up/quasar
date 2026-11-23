@@ -11,6 +11,7 @@
  * does not crash.
  */
 
+import { E_INVALID_BYTES_VALUE } from "./errors.js";
 import { isRetired, type QuasarConnection } from "./QuasarConnection.js";
 import { durationToSeconds, formatBytes, parseBytes } from "./units.js";
 
@@ -41,23 +42,6 @@ export interface CheckedConnection {
 		connect(): Promise<void>;
 	};
 }
-
-/**
- * Raised for a memory threshold that cannot be read as a size. The code is
- * upstream's, verbatim.
- */
-export class InvalidBytesValueError extends Error {
-	readonly code = "E_INVALID_BYTES_VALUE";
-	readonly status = 500;
-
-	constructor(value: unknown) {
-		super(`Invalid bytes value "${String(value)}"`);
-		this.name = "InvalidBytesValueError";
-	}
-}
-
-/** Upstream exports its error classes under `errors`; so does quasar. */
-export const errors = { E_INVALID_BYTES_VALUE: InvalidBytesValueError };
 
 /**
  * How long a check waits on a connection that is still dialling, and in how
@@ -217,7 +201,7 @@ const DEFAULT_FAIL_BYTES = 120 * 1024 * 1024;
 
 function bytesOf(value: string | number): number {
 	const bytes = parseBytes(value);
-	if (bytes === null) throw new InvalidBytesValueError(value);
+	if (bytes === null) throw new E_INVALID_BYTES_VALUE([value]);
 	return bytes;
 }
 

@@ -13,6 +13,7 @@
 
 import "./augmentations.js";
 import type { ConnectionConfig, QuasarConfig } from "./config.js";
+import { E_QUASAR_MISSING_CONFIG } from "./errors.js";
 import type { QuasarLogger } from "./QuasarConnection.js";
 import { QuasarManager } from "./QuasarManager.js";
 import { clearQuasar, setQuasar } from "./services/main.js";
@@ -45,7 +46,7 @@ export default class QuasarProvider {
 	register(): void {
 		const config = this.#app.config.get<AnyConfig>("redis");
 		if (config === undefined) {
-			throw new Error("[redis] missing config/redis.ts");
+			throw new E_QUASAR_MISSING_CONFIG();
 		}
 
 		const manager = new QuasarManager(config);

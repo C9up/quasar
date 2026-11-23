@@ -171,7 +171,12 @@ describe("quasar > scripts registered as commands", () => {
 		const c = connection("cache");
 
 		expect(() => c.runCommand("release")).toThrow(
-			/no command "release" on connection "cache"/,
+			expect.objectContaining({
+				code: "E_QUASAR_UNKNOWN_COMMAND",
+				message: expect.stringMatching(
+					/no command "release" on connection "cache"/,
+				),
+			}),
 		);
 	});
 
@@ -519,7 +524,10 @@ describe("quasar > mode, subscribeMode, slots and nodes", () => {
 
 		expect(c.slots).toBeUndefined();
 		expect(() => c.nodes("master")).toThrow(
-			/connection "cache" is not a cluster/,
+			expect.objectContaining({
+				code: "E_QUASAR_NOT_A_CLUSTER",
+				message: expect.stringMatching(/connection "cache" is not a cluster/),
+			}),
 		);
 	});
 });

@@ -8,6 +8,8 @@
  * duration string with no unit is milliseconds.
  */
 
+import { E_QUASAR_INVALID_DURATION } from "./errors.js";
+
 const BYTE_UNITS = {
 	b: 1,
 	kb: 1024,
@@ -70,9 +72,7 @@ export function durationToSeconds(value: string | number): number {
 	const matched = DURATION_PATTERN.exec(value.toLowerCase());
 	const amount = Number.parseFloat(matched?.[1] ?? "");
 	if (matched === null || !amount) {
-		throw new Error(
-			`[redis] cannot read "${value}" as a duration. Use a number of seconds, or a duration such as '30s' or '1 minute'.`,
-		);
+		throw new E_QUASAR_INVALID_DURATION([value]);
 	}
 	const unit = matched[3]
 		? SECOND

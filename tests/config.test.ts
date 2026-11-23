@@ -12,12 +12,22 @@ describe("defineConfig", () => {
 			connection: "cache",
 			connections: { main: { host: "127.0.0.1" } },
 		};
-		expect(() => defineConfig(invalid)).toThrow(/"cache" is not declared/);
+		expect(() => defineConfig(invalid)).toThrow(
+			expect.objectContaining({
+				code: "E_QUASAR_INVALID_CONFIG",
+				message: expect.stringMatching(/"cache" is not declared/),
+			}),
+		);
 	});
 
 	it("refuses an empty connection list", () => {
 		const empty: AnyConfig = { connection: "main", connections: {} };
-		expect(() => defineConfig(empty)).toThrow(/declares no connection/);
+		expect(() => defineConfig(empty)).toThrow(
+			expect.objectContaining({
+				code: "E_QUASAR_INVALID_CONFIG",
+				message: expect.stringMatching(/declares no connection/),
+			}),
+		);
 	});
 
 	it("returns the config it was given when the default is declared", () => {

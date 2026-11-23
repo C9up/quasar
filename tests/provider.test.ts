@@ -39,7 +39,12 @@ beforeEach(() => {
 describe("QuasarProvider", () => {
 	it("refuses to boot without config/redis.ts instead of dialling localhost", () => {
 		const provider = new QuasarProvider(appWith({}));
-		expect(() => provider.register()).toThrow(/missing config\/redis\.ts/);
+		expect(() => provider.register()).toThrow(
+			expect.objectContaining({
+				code: "E_QUASAR_MISSING_CONFIG",
+				message: expect.stringMatching(/missing config\/redis\.ts/),
+			}),
+		);
 	});
 
 	it('binds the manager as "redis" and seats the service accessor', () => {
@@ -117,7 +122,12 @@ describe("QuasarProvider > reporting through the application logger", () => {
 
 describe("services/main", () => {
 	it("throws a named error when used before a provider seated it", () => {
-		expect(() => redis.connection()).toThrow(/accessed before initialization/);
+		expect(() => redis.connection()).toThrow(
+			expect.objectContaining({
+				code: "E_QUASAR_NOT_BOOTED",
+				message: expect.stringMatching(/accessed before initialization/),
+			}),
+		);
 	});
 
 	it("proxies through to the seated manager once there is one", () => {

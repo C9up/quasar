@@ -2,10 +2,10 @@ import { type HealthCheckContract, HealthChecks } from "@c9up/ream/health";
 import { describe, expect, it, vi } from "vitest";
 import {
 	type CheckedConnection,
-	errors,
 	QuasarCheck,
 	QuasarMemoryUsageCheck,
 } from "../src/health.js";
+import { errors } from "../src/index.js";
 import { QuasarManager } from "../src/QuasarManager.js";
 
 const unexpected = async (): Promise<never> => {
@@ -338,7 +338,10 @@ describe("quasar checks in ream's HealthChecks", () => {
 
 	it("refuse a cache duration they cannot read", () => {
 		expect(() => new QuasarCheck(connectionWith({})).cacheFor("soon")).toThrow(
-			/cannot read "soon" as a duration/,
+			expect.objectContaining({
+				code: "E_QUASAR_INVALID_DURATION",
+				message: expect.stringMatching(/cannot read "soon" as a duration/),
+			}),
 		);
 	});
 });

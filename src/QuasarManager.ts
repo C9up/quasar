@@ -10,6 +10,10 @@ import { type InspectOptions, inspect } from "node:util";
 import type { Redis } from "ioredis";
 import type { ConnectionConfig, QuasarConfig } from "./config.js";
 import { Emitter } from "./emitter.js";
+import {
+	E_QUASAR_UNKNOWN_COMMAND,
+	E_QUASAR_UNKNOWN_CONNECTION,
+} from "./errors.js";
 import { BASE_METHODS } from "./methods.js";
 import type {
 	ChannelHandler,
@@ -174,9 +178,7 @@ export class QuasarManager<
 			: undefined;
 		if (typeof config !== "object" || config === null) {
 			const declared = Object.keys(this.#config.connections).join(", ");
-			throw new Error(
-				`[redis] connection "${name}" is not declared — got ${declared}`,
-			);
+			throw new E_QUASAR_UNKNOWN_CONNECTION([name, declared]);
 		}
 
 		const connection = new QuasarConnection(name, config, this.#logger);
@@ -381,7 +383,9 @@ for (const method of BASE_METHODS) {
 			const connection = this.connection();
 			const command = Reflect.get(connection, method);
 			if (typeof command !== "function") {
-				throw new Error(`[redis] connection has no command "${method}"`);
+				throw new E_QUASAR_UNKNOWN_COMMAND([
+					`connection has no command "${method}"`,
+				]);
 			}
 			return Reflect.apply(command, connection, args);
 		},

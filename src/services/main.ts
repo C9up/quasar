@@ -11,6 +11,7 @@
  * issuing a command needs no booted provider.
  */
 
+import { E_QUASAR_NOT_BOOTED } from "../errors.js";
 import type { QuasarService } from "../QuasarManager.js";
 
 /**
@@ -48,9 +49,7 @@ const redis: AnyManager = new Proxy(Object.create(null), {
 			return undefined;
 		}
 		if (!instance) {
-			throw new Error(
-				"[redis] accessed before initialization — register QuasarProvider, or call setQuasar() yourself.",
-			);
+			throw new E_QUASAR_NOT_BOOTED();
 		}
 		const value = Reflect.get(instance, property, instance);
 		return typeof value === "function" ? value.bind(instance) : value;
