@@ -76,9 +76,53 @@ describe("QuasarCheck", () => {
 		).run();
 
 		expect(result.status).toBe("error");
-		expect(result.message).toBe("ECONNREFUSED");
-		expect(result.meta?.error).toBe(failure);
+		expect(result.message).toBe("The redis health check failed");
+		expect(result.meta?.error).toEqual({ name: "Error", code: "ECONNREFUSED" });
 		expect(result.finishedAt).toBeInstanceOf(Date);
+	});
+
+	it("reports what failed without the error's message or properties", async () => {
+		// What ioredis attaches to a rejected handshake: the command and its
+		// arguments, the password among them.
+		const failure = Object.assign(
+			new Error("WRONGPASS invalid username-password pair"),
+			{
+				command: { name: "hello", args: ["3", "AUTH", "app", "s3cr3t-pw"] },
+				address: "10.1.2.3",
+			},
+		);
+		for (const state of [
+			{ status: "reconnecting", lastError: failure },
+			{ status: "ready" },
+		]) {
+			const result = await new QuasarCheck(
+				connectionWith(
+					{
+						ping: async () => {
+							throw failure;
+						},
+					},
+					state,
+				),
+			).run();
+			const report = JSON.stringify(result);
+			expect(report).not.toContain("s3cr3t-pw");
+			expect(report).not.toContain("10.1.2.3");
+			expect(report).not.toContain("username-password");
+			expect(result.meta?.error).toEqual({ name: "Error", code: "WRONGPASS" });
+		}
+	});
+
+	it("names a thrown value that is not an error by its type only", async () => {
+		const result = await new QuasarCheck(
+			connectionWith({
+				ping: async () => {
+					throw "redis://:pw@internal-host:6379 refused";
+				},
+			}),
+		).run();
+		expect(result.meta?.error).toEqual({ name: "string" });
+		expect(JSON.stringify(result)).not.toContain("internal-host");
 	});
 });
 
@@ -101,7 +145,7 @@ describe("a check does not wait on a connection that is not ready", () => {
 		expect(ping).not.toHaveBeenCalled();
 		expect(result.status).toBe("error");
 		expect(result.message).toBe("Unable to connect to the redis server");
-		expect(result.meta?.error).toBe(failure);
+		expect(result.meta?.error).toEqual({ name: "Error", code: "ECONNREFUSED" });
 	});
 
 	it("says which connection, and what state it was in", async () => {

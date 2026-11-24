@@ -25,6 +25,7 @@ import {
 	E_QUASAR_UNKNOWN_COMMAND,
 } from "./errors.js";
 import { REDIS_METHODS } from "./methods.js";
+import { scrubError, scrubRejections } from "./scrub.js";
 import { redisCommand } from "./tracing.js";
 
 /**
@@ -173,7 +174,10 @@ export class QuasarConnection extends Emitter<QuasarConnectionEvents> {
 		const client = this.#client;
 		// Remembered rather than thrown: ioredis reconnects on its own, and a
 		// connection that recovered should not keep reporting the old failure.
-		client.on("error", (error: unknown) => {
+		// Every error is stripped of its command's arguments before it is kept,
+		// logged or emitted: a rejected handshake carries the password.
+		client.on("error", (raw: unknown) => {
+			const error = scrubError(raw);
 			this.#lastError = error;
 			if (this.#logErrors) this.#report(error);
 			this.notify("error", { error, connection: this });
@@ -197,7 +201,11 @@ export class QuasarConnection extends Emitter<QuasarConnectionEvents> {
 			this.notify("node:removed", { connection: this, node }),
 		);
 		client.on("node error", (error: unknown, address: string) =>
-			this.notify("node:error", { error, address, connection: this }),
+			this.notify("node:error", {
+				error: scrubError(error),
+				address,
+				connection: this,
+			}),
 		);
 	}
 
@@ -534,7 +542,7 @@ export class QuasarConnection extends Emitter<QuasarConnectionEvents> {
 	 * place so `doNotLogErrors()` has a single thing to switch off.
 	 */
 	#report(error: unknown): void {
-		const payload = { err: error, connection: this.name };
+		const payload = { err: scrubError(error), connection: this.name };
 		if (this.#logger) this.#logger.error("Redis connection failure", payload);
 		else console.error("[redis] connection failure", payload);
 	}
@@ -598,7 +606,8 @@ export class QuasarConnection extends Emitter<QuasarConnectionEvents> {
 		// Recorded and reported like a command-socket error. Attaching it is
 		// also what stops ioredis' emitter from throwing on an `error` with no
 		// listener.
-		subscriber.on("error", (error: unknown) => {
+		subscriber.on("error", (raw: unknown) => {
+			const error = scrubError(raw);
 			this.#lastSubscriberError = error;
 			if (this.#logErrors) this.#report(error);
 			this.notify("subscriber:error", { error, connection: this });
@@ -807,11 +816,13 @@ function toPort(port: string | number): number {
 }
 
 /**
- * Route a client's commands through {@link redisCommand}.
+ * Route a client's commands through {@link redisCommand}, and their failures
+ * through {@link scrubError}.
  *
  * ioredis funnels every command through `sendCommand`, so wrapping that one
- * method covers them all. With no subscriber the original runs untouched and
- * no context is built.
+ * method covers them all — the handshake's `AUTH` / `HELLO` included, and a
+ * pipeline's commands, which are sent through it at `exec()`. With no tracing
+ * subscriber the command runs untouched and no context is built.
  */
 export function traceCommands(client: RedisClient, connection: string): void {
 	const send: unknown = Reflect.get(client, "sendCommand");
@@ -820,6 +831,7 @@ export function traceCommands(client: RedisClient, connection: string): void {
 		client,
 		"sendCommand",
 		function tracedSendCommand(this: unknown, ...args: unknown[]): unknown {
+			scrubRejections(args[0]);
 			if (!redisCommand.hasSubscribers) return Reflect.apply(send, this, args);
 			return redisCommand.tracePromise(
 				() => Promise.resolve(Reflect.apply(send, this, args)),

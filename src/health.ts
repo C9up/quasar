@@ -259,7 +259,9 @@ async function settle(
 			"error",
 			"Unable to connect to the redis server",
 			connection,
-			connection.lastError === undefined ? {} : { error: connection.lastError },
+			connection.lastError === undefined
+				? {}
+				: { error: describeError(connection.lastError) },
 		);
 	}
 }
@@ -291,14 +293,44 @@ function result(
 	};
 }
 
-/** Upstream's `Result.failed(error)`: the error's message, the error in meta. */
+/**
+ * A check that threw.
+ *
+ * NAMED DEVIATION — upstream's `Result.failed(error)` reports the error's
+ * message and puts the error object in `meta`. A health report is commonly
+ * served to anyone, and that object is whatever ioredis attached: the
+ * arguments of the failed command (the password of a rejected handshake),
+ * the address it dialled. The report says what failed in fixed words and
+ * names the error's kind; the error itself goes to the connection's logger.
+ */
 function failed(error: unknown, connection: CheckedConnection): HealthResult {
-	return result(
-		"error",
-		error instanceof Error ? error.message : String(error),
-		connection,
-		{ error },
+	return result("error", "The redis health check failed", connection, {
+		error: describeError(error),
+	});
+}
+
+/** A Redis reply prefix (`WRONGPASS`, `NOAUTH`) or a Node code (`ECONNREFUSED`). */
+const ERROR_CODE = /^[A-Z][A-Z0-9_]{1,31}$/;
+
+/**
+ * What a report may say about an error: its class name and a code, never its
+ * message or its properties. The code is the error's own `code`, else the
+ * first word of a Redis reply (`WRONGPASS invalid username-password pair`),
+ * kept only when it has the shape of one.
+ */
+function describeError(error: unknown): { name: string; code?: string } {
+	const name = error instanceof Error ? error.constructor.name : typeof error;
+	const own: unknown =
+		typeof error === "object" && error !== null
+			? Reflect.get(error, "code")
+			: undefined;
+	const prefix =
+		error instanceof Error ? error.message.split(" ", 1)[0] : undefined;
+	const code = [own, prefix].find(
+		(value): value is string =>
+			typeof value === "string" && ERROR_CODE.test(value),
 	);
+	return code === undefined ? { name } : { name, code };
 }
 
 /**

@@ -65,7 +65,7 @@ The Redis commands are callable straight on a connection **and on the manager**,
 await redis.set('user:42', payload, 'EX', 60)
 ```
 
-The forwarded commands are an explicit list drawn from ioredis' command list, not every function on the client. Sharded pub/sub (`ssubscribe`) is not among them — it would put the command socket in subscriber mode — and neither is ioredis' EventEmitter. The raw client stays reachable as `connection.ioConnection` for anything not wrapped here. A connection also reports its state: `connectionName`, `status`, `subscriberStatus`, `lastError`, `isConnecting()` / `isReady()` / `isClosed()`.
+The forwarded commands are an explicit list drawn from ioredis' command list, not every function on the client. Sharded pub/sub (`ssubscribe`) is not among them — it would put the command socket in subscriber mode — and neither is ioredis' EventEmitter. The raw client stays reachable as `connection.ioConnection` for anything not wrapped here. A connection also reports its state: `connectionName`, `status`, `subscriberStatus`, `lastError`, `isConnecting()` / `isReady()` / `isClosed()`. Every error a connection hands out — event payload, `lastError`, log line, rejected command — keeps `error.command.name` and drops `error.command.args`, which hold what was sent: an `AUTH` password, a cached value, a lock token.
 
 LUA scripts go through `defineCommand` / `runCommand`; a script defined on the manager reaches every open connection and is remembered for the ones opened later.
 
@@ -132,7 +132,7 @@ export const healthChecks = new HealthChecks().register([
 
 Each check is named after its connection — `Redis health check (main)`, `Redis memory consumption health check (cache)` — so two connections are two entries; `as(name)` renames one. Thresholds take bytes or a size (`'100 mb'`); an unreadable one throws `E_INVALID_BYTES_VALUE`. `compute(callback)` replaces how memory use is measured.
 
-Both return `{ status, message, finishedAt, meta }` rather than throwing — a health endpoint reports, it does not crash. The meta says which connection and in what state (`connection: { name, status }`), and for memory `memoryInBytes: { used, warningThreshold, failureThreshold }`. Neither sends a command to a connection that is not ready: ioredis would queue it rather than fail it, and a readiness probe that hangs is the outage it exists to report. A connection still dialling gets three seconds; one that has already failed gets none.
+Both return `{ status, message, finishedAt, meta }` rather than throwing — a health endpoint reports, it does not crash. The meta says which connection and in what state (`connection: { name, status }`), and for memory `memoryInBytes: { used, warningThreshold, failureThreshold }`. A failed check reports fixed text and `error: { name, code }` (`WRONGPASS`, `ECONNREFUSED`), never the error object. Neither sends a command to a connection that is not ready: ioredis would queue it rather than fail it, and a readiness probe that hangs is the outage it exists to report. A connection still dialling gets three seconds; one that has already failed gets none.
 
 A connection that was quit, or that the manager dropped once its socket ended, is reported as closed and never dialled again: the socket a check reopened would be tracked by nothing, outlive `quitAll()` and keep the process alive.
 
